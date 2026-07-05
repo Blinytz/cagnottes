@@ -30,11 +30,14 @@ PWA personnelle pour se récompenser financièrement de petits efforts : chaque 
 
 ## Test en local
 
-Un simple serveur statique suffit (le service worker exige http://localhost ou https) :
+⚠️ **Ne pas ouvrir `index.html` par double-clic.** Un PWA doit être servi par un serveur : ouvert en `file://`, le service worker ne s'enregistre pas et certains aperçus n'exécutent ni le CSS ni le JavaScript (page blanche).
 
+**Le plus simple (Windows) :** double-clique sur **`Lancer-Cagnottes.bat`**. Il démarre un petit serveur local et ouvre le navigateur sur l'app. Laisse la fenêtre noire ouverte pendant l'utilisation, ferme-la pour arrêter.
+
+**À la main :**
 ```bash
-python -m http.server 8000
-# → http://localhost:8000
+python -m http.server 4321
+# → ouvrir http://localhost:4321 dans un vrai navigateur (Chrome/Edge/Firefox)
 ```
 
 ## Structure
