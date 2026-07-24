@@ -4,7 +4,7 @@
   "displayName": "Cagnottes",
   "description": "Tirelires personnelles et projets d'épargne.",
   "lifecycle": "stable",
-  "ownership": { "audience": "single-user", "repositoryVisibility": "public", "repository": "Blinytz/blinytz" },
+  "ownership": { "audience": "single-user", "repositoryVisibility": "public", "repository": "Blinytz/cagnottes" },
   "data": { "storage": ["localStorage"], "exportAvailable": true, "productionMutationAllowed": false },
   "eclats": { "mode": "planned", "ledger": "none", "balanceMigration": "forbidden" },
   "commands": { "install": null, "dev": "python -m http.server 4321", "test": "node --check js/app.js", "build": null, "lint": null },
