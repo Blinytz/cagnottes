@@ -17,13 +17,13 @@ PWA personnelle pour se récompenser financièrement de petits efforts : chaque 
 
 ## Déploiement sur GitHub Pages
 
-1. Pousser ce dépôt sur GitHub (`blinytz`) :
+1. Pousser ce dépôt sur GitHub (`cagnottes`) :
    ```bash
-   git remote add origin https://github.com/<ton-user>/blinytz.git
+   git remote add origin https://github.com/<ton-user>/cagnottes.git
    git push -u origin main
    ```
 2. Sur GitHub : **Settings → Pages → Source : Deploy from a branch → Branch : `main` / `(root)`** → Save.
-3. L'app est servie sur `https://<ton-user>.github.io/blinytz/`. Tous les chemins sont relatifs : aucun réglage supplémentaire.
+3. L'app est servie sur `https://<ton-user>.github.io/cagnottes/`. Tous les chemins sont relatifs : aucun réglage supplémentaire.
 4. Sur Android (Chrome) : ouvrir l'URL → menu ⋮ → **« Ajouter à l'écran d'accueil »** / **« Installer l'application »**.
 
 > ⚠️ À chaque mise à jour du code, incrémenter `CACHE_VERSION` dans [sw.js](sw.js) pour que les utilisateurs reçoivent la nouvelle version.

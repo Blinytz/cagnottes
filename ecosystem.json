@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "appId": "cagnottes",
+  "displayName": "Cagnottes",
+  "description": "Tirelires personnelles et projets d'épargne.",
+  "lifecycle": "stable",
+  "ownership": { "audience": "single-user", "repositoryVisibility": "public", "repository": "Blinytz/blinytz" },
+  "data": { "storage": ["localStorage"], "exportAvailable": true, "productionMutationAllowed": false },
+  "eclats": { "mode": "planned", "ledger": "none", "balanceMigration": "forbidden" },
+  "commands": { "install": null, "dev": "python -m http.server 4321", "test": "node --check js/app.js", "build": null, "lint": null },
+  "integration": { "contractVersion": 1, "status": "manifest-only", "adapter": null }
+}
