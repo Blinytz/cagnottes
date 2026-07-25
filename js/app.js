@@ -22,7 +22,7 @@ const App = (() => {
     const h = location.hash.replace(/^#\/?/, '');
     const [seg, id] = h.split('/');
     if (seg === 'cagnotte' && id) return { name: 'cagnotte', id };
-    if (['stats', 'archives', 'bourse', 'reglages'].includes(seg)) return { name: seg };
+    if (['stats', 'archives', 'eclats', 'reglages'].includes(seg)) return { name: seg };
     return { name: 'home' };
   }
 
@@ -34,7 +34,7 @@ const App = (() => {
       cagnotte: () => Views.viewCagnotte(route.id),
       stats: () => Views.viewStats(),
       archives: () => Views.viewArchives(),
-      bourse: () => Views.viewBourse(),
+      eclats: () => Views.viewEclats(),
       reglages: () => Views.viewReglages()
     }[route.name]();
     viewEl.innerHTML = html;
@@ -43,12 +43,13 @@ const App = (() => {
     Views.afterRender(route);
   }
 
-  /* Bandeau Bourse persistant : solde temps réel + alerte négatif */
+  /* Bandeau Éclats persistant : disponible temps réel + total engagé */
   function updateHeader() {
-    const solde = Store.state.bourse.solde;
-    const el = document.getElementById('bourse-header');
-    el.classList.toggle('negatif', solde < 0);
-    el.querySelector('.bh-solde').textContent = U.fmtEUR(solde);
+    const disponible = Store.soldeDisponible();
+    const el = document.getElementById('eclats-header');
+    el.classList.toggle('vide', disponible <= 0);
+    el.querySelector('.eh-solde').textContent = U.fmtEclats(disponible);
+    el.querySelector('.eh-engage').textContent = `${U.fmtEclats(Store.totalEngage())} engagés`;
   }
 
   function updateNav(route) {
@@ -57,29 +58,52 @@ const App = (() => {
     });
   }
 
-  /* ---------- Actions +/− au palier ---------- */
+  /* ---------- Actions +/− ---------- */
 
-  function stepPlus(id) {
+  async function stepPlus(id) {
     const c = Store.getCagnotte(id);
     if (!c) return;
-    const res = Store.alimenter(id, c.palier);
-    if (!res.ok) {
-      if (res.reason === 'bourse_vide') toast('👛 Bourse vide ou négative : impossible d’alimenter la cagnotte.', 'error');
-      return;
-    }
+    const res = await Store.alimenter(id, c.palier);
+    if (!res.ok) return signalerEchecVersement(res);
     if (res.ajuste) {
-      toast(`⚖️ Bourse insuffisante : seulement <strong>${U.fmtEUR(res.effectif)}</strong> transférés (au lieu de ${U.fmtEUR(c.palier)}). La Bourse est à 0 €.`, 'warn');
+      toast(`⚖️ Éclats insuffisants : seulement <strong>${U.fmtEclats(res.effectif)}</strong> versés (au lieu de ${U.fmtEclats(c.palier)}).`, 'warn');
     }
     verifierObjectifAtteint(c);
   }
 
-  function stepMinus(id) {
-    const c = Store.getCagnotte(id);
-    if (!c) return;
-    const res = Store.retirer(id, c.palier);
-    if (res.ok && res.ajuste) {
-      toast(`⚖️ Seulement ${U.fmtEUR(res.effectif)} retirés : la cagnotte ne descend jamais sous 0 €.`, 'warn');
+  async function stepMinus(id) {
+    const res = await Store.retirer(id);
+    if (!res.ok) {
+      if (res.reason === 'cagnotte_vide') toast('Aucun versement à annuler.', 'error');
+      else signalerEchecRemboursement(res);
+      return;
     }
+    toast(`↩︎ Versement annulé : ${U.fmtEclats(res.effectif)} rendus.`, 'info');
+  }
+
+  /*
+   * Un versement non confirmé n'est JAMAIS présenté comme comptabilisé : le
+   * message distingue le refus métier (rien n'a bougé) de l'incident réseau
+   * (rejouable à l'identique, sans risque de double débit).
+   */
+  function signalerEchecVersement(res) {
+    if (res.reason === 'solde_insuffisant') {
+      toast('✦ Aucun Éclat disponible : le versement n’a pas été effectué.', 'error');
+    } else if (res.reason === 'reseau') {
+      toast('📡 Registre injoignable : le versement <strong>n’est pas comptabilisé</strong>. Tu peux le réessayer depuis l’écran Éclats.', 'error');
+    } else if (res.reason === 'en_cours') {
+      /* Double clic : on ignore silencieusement, le premier versement suit son cours. */
+    } else if (res.reason === 'archivee') {
+      toast('Cette cagnotte est validée : elle ne peut plus être alimentée.', 'error');
+    } else {
+      toast('Montant invalide.', 'error');
+    }
+  }
+
+  function signalerEchecRemboursement(res) {
+    if (res.reason === 'non_comptabilise') toast('Ce versement n’a jamais été comptabilisé : rien à rendre.', 'warn');
+    else if (res.reason === 'archivee') toast('Cette cagnotte est validée : ses versements ne sont plus annulables.', 'error');
+    else toast('📡 Registre injoignable : l’annulation n’a pas abouti. Réessaie dans un moment.', 'error');
   }
 
   function verifierObjectifAtteint(c) {
@@ -97,8 +121,8 @@ const App = (() => {
     const id = actEl.dataset.id;
 
     switch (action) {
-      case 'goto-bourse':
-        location.hash = '#/bourse';
+      case 'goto-eclats':
+        location.hash = '#/eclats';
         break;
 
       case 'open-cagnotte':
@@ -107,8 +131,29 @@ const App = (() => {
         location.hash = '#/cagnotte/' + actEl.dataset.id;
         break;
 
-      case 'step-plus': stepPlus(id); break;
-      case 'step-minus': stepMinus(id); break;
+      case 'step-plus': await stepPlus(id); break;
+      case 'step-minus': await stepMinus(id); break;
+
+      case 'annuler-versement': {
+        e.stopPropagation();
+        const v = Store.eclats.versement(id);
+        if (!v) return;
+        if (await Views.confirmDialog(`Annuler ce versement de <strong>${U.fmtEclats(v.amount)}</strong> ? Les Éclats retournent au registre.`, { okLabel: 'Annuler le versement' })) {
+          const res = await Store.annulerVersement(id);
+          if (res.ok) toast(`↩︎ ${U.fmtEclats(res.effectif)} rendus.`, 'info');
+          else signalerEchecRemboursement(res);
+        }
+        break;
+      }
+
+      case 'reprendre-versement': {
+        const res = await Store.eclats.reprendre(id);
+        await Store.rafraichirSolde();
+        App.render();
+        if (res.ok) toast(`✅ Versement confirmé : ${U.fmtEclats(res.amount)}.`, 'success');
+        else signalerEchecVersement(res);
+        break;
+      }
 
       case 'new-cagnotte': Views.cagnotteFormModal(); break;
       case 'edit-cagnotte': Views.cagnotteFormModal(Store.getCagnotte(id)); break;
@@ -117,11 +162,15 @@ const App = (() => {
         const c = Store.getCagnotte(id);
         if (!c) return;
         const extra = (c.montantActuel > 0 && c.statut !== 'archivée')
-          ? ` Les ${U.fmtEUR(c.montantActuel)} qu'elle contient retourneront dans la Bourse.` : '';
+          ? ` Les ${U.fmtEclats(c.montantActuel)} qu'elle contient retourneront au registre.` : '';
         if (await Views.confirmDialog(`Supprimer définitivement « ${U.esc(c.nom)} » ?${extra}`, { danger: true, okLabel: 'Supprimer' })) {
-          Store.deleteCagnotte(id);
-          toast('Cagnotte supprimée.');
-          location.hash = '#/';
+          const res = await Store.deleteCagnotte(id);
+          if (res.ok) {
+            toast(res.rendus ? `Cagnotte supprimée · ${U.fmtEclats(res.rendus)} rendus.` : 'Cagnotte supprimée.');
+            location.hash = '#/';
+          } else if (res.reason === 'remboursement_incomplet') {
+            toast('📡 Registre injoignable : la cagnotte n’a pas été supprimée pour ne perdre aucun Éclat. Réessaie dans un moment.', 'error');
+          }
         }
         break;
       }
@@ -151,14 +200,16 @@ const App = (() => {
         break;
       }
 
-      case 'export-data': {
-        const blob = new Blob([Store.exportJSON()], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `cagnottes-sauvegarde-${U.todayKey()}.json`;
-        a.click();
-        URL.revokeObjectURL(a.href);
+      case 'export-data':
+        telecharger(Store.exportJSON(), `cagnottes-sauvegarde-${U.todayKey()}.json`);
         toast('💾 Sauvegarde téléchargée.', 'success');
+        break;
+
+      case 'export-euro': {
+        const brut = localStorage.getItem('cagnottes_sauvegarde_euro_v1');
+        if (!brut) return toast('Aucune copie en euros conservée.', 'error');
+        telecharger(brut, `cagnottes-avant-eclats-${U.todayKey()}.json`);
+        toast('💾 Copie en euros téléchargée.', 'success');
         break;
       }
 
@@ -167,8 +218,10 @@ const App = (() => {
         break;
 
       case 'reset-data':
-        if (await Views.confirmDialog('Toutes tes données (cagnottes, Bourse, historiques) seront définitivement effacées. Pense à exporter avant !', { danger: true, okLabel: 'Tout effacer' })) {
+        if (await Views.confirmDialog(`Toutes tes données seront effacées : cagnottes, journal des versements et journal d'Éclats. <strong>Les versements ne seront plus annulables</strong> et le solde repartira du solde d'ouverture. Pense à exporter avant !`, { danger: true, okLabel: 'Tout effacer' })) {
           Store.resetAll();
+          await Store.rafraichirSolde();
+          render();
           toast('Données effacées.');
           location.hash = '#/';
         }
@@ -185,6 +238,15 @@ const App = (() => {
     }
   });
 
+  function telecharger(contenu, nom) {
+    const blob = new Blob([contenu], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nom;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   /* ---------- Import de fichier JSON ---------- */
 
   document.addEventListener('change', async e => {
@@ -193,10 +255,14 @@ const App = (() => {
     e.target.value = '';
     if (!file) return;
     const text = await file.text();
-    if (await Views.confirmDialog('Importer ce fichier remplacera <strong>toutes</strong> tes données actuelles (cagnottes et Bourse). Continuer ?', { danger: true, okLabel: 'Importer' })) {
+    if (await Views.confirmDialog('Importer ce fichier remplacera <strong>toutes</strong> tes données actuelles (cagnottes et Éclats). Continuer ?', { danger: true, okLabel: 'Importer' })) {
       const res = Store.importJSON(text);
       if (res.ok) {
-        toast('✅ Données restaurées avec succès.', 'success');
+        await Store.rafraichirSolde();
+        render();
+        toast(res.converti
+          ? `✅ Sauvegarde en euros restaurée et convertie en Éclats (1 € = ${res.rapport.taux} ✦).`
+          : '✅ Données restaurées avec succès.', 'success');
         location.hash = '#/';
       } else {
         toast(res.reason === 'json_invalide'
@@ -208,24 +274,18 @@ const App = (() => {
 
   /* ---------- Soumission des formulaires ---------- */
 
-  /* Mémorise quel bouton (+/−) a déclenché la soumission */
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('button[data-sens]');
-    if (btn && btn.form) btn.form._sens = btn.dataset.sens;
-  });
-
-  document.addEventListener('submit', e => {
+  document.addEventListener('submit', async e => {
     const form = e.target;
 
     /* Création / édition de cagnotte */
     if (form.id === 'form-cagnotte') {
       e.preventDefault();
       const nom = form.nom.value.trim();
-      const objectif = U.parseMontant(form.objectif.value);
-      const palier = U.parseMontant(form.palier.value);
+      const objectif = U.parseEclats(form.objectif.value);
+      const palier = U.parseEclats(form.palier.value);
       if (!nom) return toast('Le nom est obligatoire.', 'error');
-      if (!(objectif > 0)) return toast('L’objectif doit être un montant positif.', 'error');
-      if (!(palier > 0)) return toast('Le palier doit être un montant positif.', 'error');
+      if (!(objectif > 0)) return toast('L’objectif doit être un nombre d’Éclats positif.', 'error');
+      if (!(palier > 0)) return toast('Le palier doit être un nombre d’Éclats positif.', 'error');
       const modal = form.closest('.modal');
       const image = modal._image || { type: 'emoji', value: '🎁' };
       const description = form.description.value.trim();
@@ -241,56 +301,22 @@ const App = (() => {
       return;
     }
 
-    /* Montant personnalisé sur une cagnotte */
+    /* Versement d'un montant libre dans une cagnotte */
     if (form.id === 'form-montant-libre') {
       e.preventDefault();
       const id = form.dataset.id;
       const c = Store.getCagnotte(id);
-      let montant = U.parseMontant(form.montant.value);
+      const montant = U.parseEclats(form.montant.value);
       const note = form.note.value.trim();
-      if (!Number.isFinite(montant) || montant === 0) return toast('Montant invalide.', 'error');
-      /* Un montant saisi négatif force un retrait, quel que soit le bouton */
-      let sens = form._sens || 'plus';
-      if (montant < 0) { sens = 'minus'; montant = Math.abs(montant); }
-
-      if (sens === 'plus') {
-        const res = Store.alimenter(id, montant, note);
-        if (!res.ok) {
-          return toast(res.reason === 'bourse_vide'
-            ? '👛 Bourse vide ou négative : impossible d’alimenter la cagnotte.'
-            : 'Montant invalide.', 'error');
-        }
-        if (res.ajuste) {
-          toast(`⚖️ Bourse insuffisante : seulement <strong>${U.fmtEUR(res.effectif)}</strong> transférés (au lieu de ${U.fmtEUR(montant)}). La Bourse est à 0 €.`, 'warn');
-        } else {
-          toast(`+${U.fmtEUR(res.effectif)} ajoutés 💪`, 'success');
-        }
-        verifierObjectifAtteint(c);
-      } else {
-        const res = Store.retirer(id, montant, note);
-        if (!res.ok) {
-          return toast(res.reason === 'cagnotte_vide' ? 'La cagnotte est déjà à 0 €.' : 'Montant invalide.', 'error');
-        }
-        toast(res.ajuste
-          ? `⚖️ Seulement ${U.fmtEUR(res.effectif)} retirés (la cagnotte ne descend pas sous 0 €).`
-          : `−${U.fmtEUR(res.effectif)} reversés à la Bourse.`, res.ajuste ? 'warn' : 'info');
+      if (!Number.isFinite(montant) || montant <= 0) {
+        return toast('Montant invalide : indique un nombre d’Éclats positif.', 'error');
       }
-      return;
-    }
-
-    /* Mouvement manuel de Bourse */
-    if (form.id === 'form-bourse') {
-      e.preventDefault();
-      let montant = U.parseMontant(form.montant.value);
-      const note = form.note.value.trim();
-      if (!Number.isFinite(montant) || montant === 0) return toast('Montant invalide.', 'error');
-      const sens = form._sens || 'plus';
-      if (sens === 'minus' && montant > 0) montant = -montant;
-      const res = Store.mouvementManuelBourse(montant, note);
-      if (res.ok) {
-        toast(montant > 0 ? `+${U.fmtEUR(montant)} ajoutés à la Bourse 👛` : `${U.fmtEUR(montant)} débités de la Bourse.`, 'success');
-      }
-      return;
+      const res = await Store.alimenter(id, montant, note);
+      if (!res.ok) return signalerEchecVersement(res);
+      toast(res.ajuste
+        ? `⚖️ Éclats insuffisants : seulement <strong>${U.fmtEclats(res.effectif)}</strong> versés (au lieu de ${U.fmtEclats(montant)}).`
+        : `+${U.fmtEclats(res.effectif)} versés 💪`, res.ajuste ? 'warn' : 'success');
+      verifierObjectifAtteint(c);
     }
   });
 
@@ -303,8 +329,8 @@ const App = (() => {
 
   /* ---------- Initialisation ---------- */
 
-  function init() {
-    /* Tout mouvement redessine l'écran courant + le bandeau Bourse */
+  async function init() {
+    /* Tout mouvement redessine l'écran courant + le bandeau Éclats */
     Store.subscribe(() => render());
     window.addEventListener('hashchange', render);
     window.addEventListener('resize', () => Views.afterRender(parseRoute()));
@@ -314,6 +340,7 @@ const App = (() => {
       delete Store.state._corrupted;
     }
 
+    await Store.rafraichirSolde();
     render();
 
     /* Service worker (PWA hors-ligne) */
@@ -324,5 +351,3 @@ const App = (() => {
 
   return { init, render };
 })();
-
-document.addEventListener('DOMContentLoaded', App.init);

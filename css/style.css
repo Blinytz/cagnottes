@@ -39,9 +39,9 @@ a { color: var(--accent); }
 .muted { color: var(--muted); }
 .small { font-size: 0.82rem; }
 
-/* ---------- Bandeau Bourse persistant ---------- */
+/* ---------- Bandeau Éclats persistant ---------- */
 
-#bourse-header {
+#eclats-header {
   position: sticky;
   top: 0;
   z-index: 50;
@@ -57,18 +57,23 @@ a { color: var(--accent); }
   user-select: none;
   transition: background 0.3s;
 }
-#bourse-header .bh-icon { font-size: 1.3rem; }
-#bourse-header .bh-label { font-weight: 600; opacity: 0.85; }
-#bourse-header .bh-solde {
+#eclats-header .eh-icon { font-size: 1.3rem; }
+#eclats-header .eh-label { font-weight: 600; opacity: 0.85; }
+#eclats-header .eh-engage {
   margin-left: auto;
+  font-size: 0.8rem;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+#eclats-header .eh-solde {
   font-weight: 800;
   font-size: 1.15rem;
   font-variant-numeric: tabular-nums;
 }
-#bourse-header .bh-chevron { opacity: 0.6; font-size: 1.2rem; }
-#bourse-header.negatif {
-  background: linear-gradient(135deg, #8E2626, var(--danger));
-  box-shadow: 0 2px 12px rgba(214, 69, 69, 0.4);
+#eclats-header .eh-chevron { opacity: 0.6; font-size: 1.2rem; }
+#eclats-header.vide {
+  background: linear-gradient(135deg, #6B6250, #8A8578);
+  box-shadow: 0 2px 12px rgba(90, 85, 73, 0.35);
 }
 
 /* ---------- Vues & layout ---------- */
@@ -354,6 +359,8 @@ textarea:focus, input:focus { outline: none; border-color: var(--accent); }
   font-size: 0.88rem;
 }
 .mvt:last-child { border-bottom: none; }
+/* Bouton d'annulation d'un versement, poussé en fin de ligne */
+.mvt > .btn { margin-left: auto; flex: 0 0 auto; align-self: center; }
 .mvt-montant {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -364,9 +371,9 @@ textarea:focus, input:focus { outline: none; border-color: var(--accent); }
 .mvt-montant.neg { color: var(--danger); }
 .mvt-info { color: #5C5749; }
 
-/* ---------- Page Bourse ---------- */
+/* ---------- Page Éclats ---------- */
 
-.bourse-solde {
+.eclats-solde {
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -376,15 +383,54 @@ textarea:focus, input:focus { outline: none; border-color: var(--accent); }
   flex-direction: column;
   gap: 4px;
 }
-.bourse-solde .bourse-icon { font-size: 2.2rem; }
-.bourse-solde .bourse-montant {
+.eclats-solde .eclats-icon { font-size: 2.2rem; color: var(--gold); }
+.eclats-solde .eclats-montant {
   font-size: 2.4rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: var(--accent-dark);
 }
-.bourse-solde.negatif .bourse-montant { color: var(--danger); }
-.bourse-solde.negatif { outline: 2px solid var(--danger-soft); }
+
+.eclats-repartition {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.eclats-part {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 12px;
+  text-align: center;
+}
+.eclats-part-val {
+  font-size: 1.15rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-dark);
+}
+.eclats-part-lbl { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+
+/* Répartition par application (même lecture que Centrale) */
+.app-list { list-style: none; margin: 0; padding: 0; }
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+.app-row:last-child { border-bottom: none; }
+.app-icone { font-size: 1.1rem; width: 1.6rem; text-align: center; }
+.app-nom { font-weight: 600; }
+.app-chiffres {
+  margin-left: auto;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- Statistiques ---------- */
 

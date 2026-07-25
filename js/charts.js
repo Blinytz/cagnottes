@@ -138,8 +138,8 @@ const Charts = (() => {
   }
 
   function formatShort(v) {
-    if (Math.abs(v) >= 1000) return (v / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' k€';
-    return v.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' €';
+    if (Math.abs(v) >= 1000) return (v / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' k✦';
+    return v.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' ✦';
   }
 
   /* Convertit une couleur hex (#RRGGBB) en rgba avec alpha */

@@ -104,6 +104,62 @@ export function createCagnottesEclats({
 
   function soldeDisponible() { return ledger.solde(); }
 
+  // Versements encore engagés dans une cagnotte, du plus ancien au plus récent.
+  // Ce sont les seuls annulables : le registre rembourse par référence, en
+  // tout-ou-rien.
+  function annulablesDe(cagnotteId) {
+    return versementsDe(cagnotteId)
+      .filter((v) => v.statut === STATUT.CONFIRME
+        && v.refund?.statut !== REFUND_STATUT.CONFIRME)
+      .sort((a, b) => String(a.confirmedAt || a.createdAt)
+        .localeCompare(String(b.confirmedAt || b.createdAt)));
+  }
+
+  // Dernier versement annulable — cible du bouton « − ».
+  function dernierAnnulable(cagnotteId) {
+    const liste = annulablesDe(cagnotteId);
+    return liste.length ? liste[liste.length - 1] : null;
+  }
+
+  /*
+   * Événements comptables d'une cagnotte, à plat et datés : un versement
+   * confirmé (positif) et, s'il a été annulé, son remboursement (négatif).
+   * Sert à dériver l'historique et la liste affichée — le journal des
+   * versements étant la source de vérité, rien n'est stocké en double.
+   */
+  function evenementsDe(cagnotteId) {
+    const evts = [];
+    versementsDe(cagnotteId).forEach((v) => {
+      if (v.statut !== STATUT.CONFIRME) return;
+      evts.push({
+        date: v.confirmedAt || v.createdAt,
+        montant: v.amount,
+        note: v.note,
+        versementId: v.id,
+        type: 'versement',
+        annulable: v.refund?.statut !== REFUND_STATUT.CONFIRME,
+      });
+      if (v.refund?.statut === REFUND_STATUT.CONFIRME) {
+        evts.push({
+          date: v.refund.confirmedAt,
+          montant: -v.refund.amount,
+          note: v.refund.motif,
+          versementId: v.id,
+          type: 'annulation',
+          annulable: false,
+        });
+      }
+    });
+    return evts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }
+
+  // Versements non comptabilisés (réseau/refus) : l'UI propose de les rejouer.
+  function enSouffrance() {
+    return tousVersements().filter((v) => v.statut === STATUT.ERREUR
+      || v.statut === STATUT.EN_ATTENTE
+      || v.refund?.statut === REFUND_STATUT.ERREUR);
+  }
+
   // ---- Écriture : versement ----
 
   async function envoyerSpend(rec) {
@@ -147,7 +203,7 @@ export function createCagnottesEclats({
 
   // Nouveau versement (crée le brouillon puis l'envoie). Garde « en cours »
   // par cagnotte : un second appel concurrent est refusé sans créer de doublon.
-  async function verser(cagnotteId, montantDemande) {
+  async function verser(cagnotteId, montantDemande, note = '') {
     if (!cagnotteId) return { ok: false, reason: 'cagnotte_invalide' };
     if (!Number.isFinite(montantDemande) || montantDemande <= 0) {
       return { ok: false, reason: 'montant_invalide' };
@@ -162,6 +218,7 @@ export function createCagnottesEclats({
         requested: montantDemande,
         amount: 0,
         reason: 'Versement dans une cagnotte',
+        note: note || undefined,
         statut: STATUT.EN_ATTENTE,
         createdAt: now(),
         movementId: null,
@@ -238,11 +295,20 @@ export function createCagnottesEclats({
     }
   }
 
+  // Remplace le journal (bascule euro → Éclats, import d'une sauvegarde).
+  function remplacerVersements(versements) {
+    etat = { versements: versements && typeof versements === 'object' ? versements : {} };
+    sauver();
+    return etat;
+  }
+
   return {
     STATUT, REFUND_STATUT, APP_ID,
     verser, reprendre, annuler,
     versement, tousVersements, versementsDe,
+    annulablesDe, dernierAnnulable, evenementsDe, enSouffrance,
     engageDe, engageTotal, soldeDisponible,
+    remplacerVersements,
     _etat: () => etat,
     _recharger: () => { etat = charger(); return etat; },
   };

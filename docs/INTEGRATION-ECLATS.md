@@ -1,53 +1,103 @@
 # Intégration de Cagnottes au registre commun d'Éclats
 
-Objectif : le solde disponible de Cagnottes vient du **registre commun** (le même
-projet Supabase que Pronos), plus de la « Bourse » locale. Un versement consomme
-des Éclats communs ; l'annuler rembourse exactement une fois.
+Cagnottes ne compte plus qu'en **Éclats**, cagnottes comprises. La « Bourse »
+locale a été supprimée : l'application ne crée jamais d'Éclats, elle en dépense
+et en rend. Le solde vient d'un **registre** — local aujourd'hui, le registre
+commun de l'écosystème (même projet Supabase que Pronos) dès que la migration
+sera exécutée.
 
-## Ce qui est livré (local, réversible, testé)
+## Ce qui est livré et branché
 
 | Fichier | Rôle |
 |---|---|
-| `js/eclats-registre.js` | Adaptateur commun du registre (auth mot de passe, RPC `eclats_balance` / `eclats_spend` / `eclats_refund` / `eclats_aggregates_by_app`). **Clé publishable uniquement**, aucun secret. |
-| `js/eclats-cagnottes.js` | Contrôleur : versement = dépense plafonnée confirmée serveur ; annulation = remboursement exactement-une-fois ; états `en_attente` / `confirme` / `refuse` / `erreur` ; garde double-clic ; persistance dans une clé dédiée. |
-| `tests/eclats.test.mjs` | 11 tests (`node --test`) contre un faux registre reproduisant la sémantique SQL. |
+| `js/eclats-registre.js` | Client du registre commun (auth mot de passe, RPC `eclats_balance` / `eclats_spend` / `eclats_refund` / `eclats_aggregates_by_app`). **Clé publishable uniquement**, aucun secret. |
+| `js/eclats-local.js` | Registre **local** au contrat identique, utilisé en attendant la bascule. Reproduit la sémantique SQL : plafond au solde, idempotence par clé, remboursement exactement-une-fois. |
+| `js/eclats-cagnottes.js` | Journal des versements : versement = dépense confirmée serveur ; annulation = remboursement exactement-une-fois ; états `en_attente` / `confirme` / `refuse` / `erreur` ; garde double-clic. |
+| `js/eclats-migration.js` | Bascule euro → Éclats (fonctions pures, sans effet de bord). |
+| `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient le solde.** |
+| `tests/` | 34 tests (`node --test "tests/*.test.mjs"`) : contrôleur, équivalence du registre local avec le SQL, bascule. |
 
-Le contrôleur écrit dans `localStorage['cagnottes_eclats_v1']` — **séparé** de
-`localStorage['cagnottes_app_state_v1']`. Les cagnottes, objectifs, icônes, ordre
-et historiques existants **ne sont ni touchés ni convertis**.
+## La bascule vers le registre commun
 
-Les RPC utilisées sont définies dans la migration `apps/pronos/sql/registre_commun.sql`.
+Une ligne dans `js/main.js` :
 
-## Modèle cible dans l'UI (à câbler)
+```js
+import { createRegistre } from './eclats-registre.js';
+const registre = createRegistre();   // au lieu de createRegistreLocal()
+```
 
-- Le bandeau haut n'affiche plus une « Bourse » locale mais le **solde commun**
-  (`ec.soldeDisponible()`), plus les **Éclats engagés** (`ec.engageTotal()`).
-- « Alimenter une cagnotte » appelle `ec.verser(cagnotteId, montant)` :
-  - succès → afficher « confirmé » et le montant réellement versé (peut être
-    plafonné : `adjusted`) ;
-  - `solde_insuffisant` → message clair, rien n'est comptabilisé ;
-  - `reseau` → état « en attente / erreur », bouton **Réessayer** (`ec.reprendre`).
-- « Retirer / supprimer un versement » appelle `ec.annuler(versementId)`
-  (remboursement idempotent).
-- Une opération hors ligne n'est **jamais** présentée comme comptabilisée tant que
-  le serveur ne l'a pas confirmée (statut `en_attente`).
-- Les montants passent des **euros** aux **Éclats (✦)** pour les nouvelles
-  opérations connectées.
+Ni le Store ni l'interface ne changent : les deux registres exposent le même
+contrat, et `tests/eclats-local.test.mjs` verrouille cette équivalence. Ce qui
+reste à faire côté produit :
 
-## Ce qui reste bloqué sur une décision / action de Jérémy
+1. **Exécuter la migration** `apps/pronos/sql/registre_commun.sql` (voir
+   `registre_commun_backup / _verification / _rollback`). L'UI connectée **ne
+   doit pas** être publiée avant.
+2. **Ajouter un écran de connexion** Supabase (même compte que Pronos), en
+   réutilisant `eclats-registre.js`.
+3. **Reprendre le solde d'ouverture** : les 100 ✦ de départ ont été fixés
+   arbitrairement et devront être corrigés lors de la synchronisation avec
+   Centrale.
+4. **Décider du sort du journal local** : les mouvements tenus localement ne
+   sont pas transférés automatiquement dans le registre commun.
 
-1. **Exécuter la migration** `registre_commun.sql` sur la base (voir
-   `apps/pronos/sql/registre_commun_*.sql`). L'UI connectée **ne doit pas** être
-   publiée avant.
-2. **Session Supabase** dans Cagnottes (même compte que Pronos) — écran de
-   connexion à ajouter, réutilisant `eclats-registre.js`.
-3. **Stratégie de bascule** des anciennes données euro (aucune conversion
-   automatique ; options à présenter le moment venu).
+Tant que la bascule n'est pas faite, l'écran Éclats affiche explicitement
+« Registre local », pour qu'aucun solde ne soit présenté comme partagé alors
+qu'il ne l'est pas.
+
+## Conversion des données euro (décision du 25/07/2026)
+
+Taux fixe **1 € = 100 ✦**, appliqué **une seule fois** à la première ouverture.
+Le taux rend tous les montants entiers sans perte, l'Éclat étant indivisible :
+0,50 € → 50 ✦, 60 € → 6 000 ✦.
+
+> Cette conversion **remplace** la règle « aucune conversion euro→Éclat
+> automatique » posée initialement dans `contracts/REGISTRE-PARTAGE.md`. Elle
+> est unique, explicite, et laisse derrière elle une copie intégrale des
+> données d'origine (`cagnottes_sauvegarde_euro_v1`, exportable depuis les
+> Réglages).
+
+L'historique n'est pas recopié mais **rejoué** en versements : un apport devient
+un versement confirmé daté, un retrait annule les versements les plus récents
+(LIFO) en re-versant le reliquat quand il ne consomme qu'une partie du dernier.
+Le journal reconstruit obéit donc exactement aux règles retenues pour l'avenir,
+avec les mêmes dates et les mêmes montants (×100). Le solde de chaque cagnotte
+est ensuite recalé sur le montant réellement affiché avant la bascule : c'est
+lui qui fait foi pour l'utilisateur, même si l'historique était incomplet.
+
+L'ancien solde de Bourse n'est **pas** reporté : il est remplacé par le solde
+d'ouverture. Le mouvement d'ouverture couvre ce solde **plus** tout ce qui est
+déjà engagé dans les cagnottes, faute de quoi le journal rejoué décrirait des
+dépenses sans provision.
+
+## Modèle appliqué dans l'UI
+
+- Le bandeau haut affiche le **solde disponible** et le **total engagé**.
+- L'écran **Éclats** (qui remplace l'onglet Bourse) montre disponible, engagé,
+  déjà récompensé, et la **répartition par application** — la même lecture que
+  Centrale, via `eclats_aggregates_by_app`.
+- « Verser » appelle `ec.verser()` : succès → montant réellement versé (peut
+  être plafonné) ; `solde_insuffisant` → message clair, rien n'est
+  comptabilisé ; `reseau` → état « erreur », bouton **Réessayer** sur l'écran
+  Éclats (`ec.reprendre`, même clé, donc jamais de double débit).
+- Le bouton « − » annule le **dernier versement encore engagé**, pour son
+  montant exact ; chaque versement est aussi annulable depuis la liste des
+  mouvements. Il n'existe pas de retrait d'un montant arbitraire : le registre
+  rembourse par référence, en tout-ou-rien.
+- **Supprimer une cagnotte** rembourse tous ses versements. Si l'un échoue,
+  rien n'est effacé — mieux vaut une cagnotte encore là que des Éclats perdus.
+- **Valider une cagnotte** n'écrit rien : les Éclats ont déjà été dépensés.
 
 ## Garde-fous
 
 - Aucune clé `service_role` dans le navigateur.
-- Le solde n'est jamais stocké ni écrit côté client : il est lu du registre.
-- Aucune écriture directe dans `eclats_ledger` : uniquement via les RPC atomiques.
-- Le mode connecté sera activé explicitement ; par défaut l'app reste inchangée
-  et ne dépend pas de la migration.
+- Le solde n'est jamais stocké ni écrit côté client : il est la somme d'un
+  journal. Le montant d'une cagnotte est dérivé de ses versements, jamais
+  recopié — une divergence entre l'affichage et la comptabilité est donc
+  structurellement impossible.
+- Aucune écriture directe dans `eclats_ledger` : uniquement via les RPC
+  atomiques.
+- Une opération hors ligne n'est **jamais** présentée comme comptabilisée tant
+  que le registre ne l'a pas confirmée.
+- Effacer les données locales détruit les clés d'idempotence et rend les
+  versements inannulables : l'application le dit avant d'effacer.

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Cagnottes</title>
-  <meta name="description" content="Récompense tes petits efforts : des cagnottes d'épargne pour tes envies.">
+  <meta name="description" content="Récompense tes petits efforts : des cagnottes d'Éclats pour tes envies.">
   <meta name="theme-color" content="#175C4C">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon-192.png">
@@ -13,12 +13,13 @@
 </head>
 <body>
 
-  <!-- Bandeau Bourse persistant (visible sur les 6 écrans) -->
-  <header id="bourse-header" data-action="goto-bourse" title="Voir la Bourse">
-    <span class="bh-icon">👛</span>
-    <span class="bh-label">Bourse</span>
-    <span class="bh-solde">0,00 €</span>
-    <span class="bh-chevron">›</span>
+  <!-- Bandeau Éclats persistant (visible sur les 6 écrans) -->
+  <header id="eclats-header" data-action="goto-eclats" title="Voir mes Éclats">
+    <span class="eh-icon">✦</span>
+    <span class="eh-label">Éclats</span>
+    <span class="eh-engage"></span>
+    <span class="eh-solde">0 ✦</span>
+    <span class="eh-chevron">›</span>
   </header>
 
   <main id="view"></main>
@@ -26,7 +27,7 @@
   <nav id="bottom-nav">
     <a href="#/" data-route="home"><span>🏠</span>Cagnottes</a>
     <a href="#/stats" data-route="stats"><span>📊</span>Stats</a>
-    <a href="#/bourse" data-route="bourse"><span>👛</span>Bourse</a>
+    <a href="#/eclats" data-route="eclats"><span>✦</span>Éclats</a>
     <a href="#/archives" data-route="archives"><span>🏆</span>Archives</a>
     <a href="#/reglages" data-route="reglages"><span>⚙️</span>Réglages</a>
   </nav>
@@ -34,10 +35,16 @@
   <div id="modal-root"></div>
   <div id="toast-root"></div>
 
+  <!--
+    Les scripts classiques posent les objets globaux (U, Charts, Views, App),
+    puis le module `main.js` assemble le registre d'Éclats et démarre l'app.
+    Un module s'exécute toujours après les scripts classiques : l'ordre est donc
+    garanti sans `defer`.
+  -->
   <script src="js/utils.js"></script>
-  <script src="js/store.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/views.js"></script>
   <script src="js/app.js"></script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
