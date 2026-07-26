@@ -39,13 +39,14 @@ export function createRegistreLocal({
   storage,
   uid = defaultUid,
   now = () => new Date().toISOString(),
+  cle = LEDGER_STORAGE_KEY,
 } = {}) {
   const store = storage
     || (typeof globalThis !== 'undefined' && globalThis.localStorage) || memoryStorage();
 
   function charger() {
     try {
-      const parsed = JSON.parse(store.getItem(LEDGER_STORAGE_KEY) || 'null');
+      const parsed = JSON.parse(store.getItem(cle) || 'null');
       if (!parsed || !Array.isArray(parsed.mouvements)) return { version: 1, mouvements: [] };
       return parsed;
     } catch {
@@ -54,7 +55,7 @@ export function createRegistreLocal({
   }
 
   let etat = charger();
-  function sauver() { store.setItem(LEDGER_STORAGE_KEY, JSON.stringify(etat)); }
+  function sauver() { store.setItem(cle, JSON.stringify(etat)); }
 
   function total() {
     return etat.mouvements.reduce((s, m) => s + m.amount, 0);
@@ -172,6 +173,38 @@ export function createRegistreLocal({
     };
   }
 
+  // Crédit (entrée de valeur). Symétrique de `depenser`, idempotent par clé :
+  // rejouer la même clé ne crédite jamais deux fois. Utilisé par la Bourse en
+  // euros, alimentée par les conversions d'Éclats.
+  async function crediter({
+    appId, montant, reason, referenceType, referenceId, idempotencyKey, metadata,
+  }) {
+    if (!appId) throw new Error('app_id requis');
+    if (!Number.isFinite(montant) || montant <= 0) throw new Error('Montant invalide');
+    if (!idempotencyKey || idempotencyKey.length < 8) throw new Error("Clé d'idempotence invalide");
+
+    const existant = parCle(idempotencyKey);
+    if (existant) {
+      return {
+        movement_id: existant.id,
+        amount: existant.amount,
+        balance_after: total(),
+        idempotent_replay: true,
+      };
+    }
+
+    const mouvement = inserer({
+      amount: ent(montant), appId, kind: 'reward', reason,
+      referenceType, referenceId, idempotencyKey, metadata,
+    });
+    return {
+      movement_id: mouvement.id,
+      amount: mouvement.amount,
+      balance_after: total(),
+      idempotent_replay: false,
+    };
+  }
+
   // Agrégats par application — même forme que la RPC eclats_aggregates_by_app.
   async function agregatsParApp() {
     const parApp = new Map();
@@ -203,7 +236,7 @@ export function createRegistreLocal({
   return {
     estLocal: true,
     estConnecte, utilisateur,
-    solde, depenser, rembourser, agregatsParApp, mouvements,
+    solde, depenser, rembourser, crediter, agregatsParApp, mouvements,
     // Écriture directe, réservée à la migration (rejeu d'un historique daté).
     _inserer: inserer,
     _etat: () => etat,
