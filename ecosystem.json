@@ -6,7 +6,7 @@
   "lifecycle": "stable",
   "ownership": { "audience": "single-user", "repositoryVisibility": "public", "repository": "Blinytz/cagnottes" },
   "data": { "storage": ["localStorage"], "exportAvailable": true, "productionMutationAllowed": false },
-  "eclats": { "mode": "planned", "ledger": "shared-candidate", "balanceMigration": "forbidden" },
+  "eclats": { "mode": "shared-optin", "ledger": "shared", "balanceMigration": "done-1eur-100eclats" },
   "commands": { "install": null, "dev": "python -m http.server 4321", "test": "node --test", "build": null, "lint": null },
-  "integration": { "contractVersion": 1, "status": "adapter-ready", "adapter": "js/eclats-cagnottes.js", "requires": "apps/pronos/sql/registre_commun.sql" }
+  "integration": { "contractVersion": 1, "status": "connectable", "adapter": "js/eclats-cagnottes.js", "client": "js/eclats-registre.js", "requires": "apps/pronos/sql/registre_commun.sql" }
 }

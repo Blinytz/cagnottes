@@ -1,24 +1,28 @@
 // Point d'entrée : assemble le registre d'Éclats, le journal des versements et
 // le Store, puis démarre l'application.
 //
-// C'est le SEUL endroit qui décide d'où vient le solde. Le jour où la migration
-// `registre_commun.sql` sera exécutée et où Cagnottes aura une session Supabase,
-// il suffira de remplacer `createRegistreLocal()` par `createRegistre()` — les
-// deux exposent le même contrat, et ni le Store ni l'interface ne changent.
+// C'est le SEUL endroit qui décide d'où vient le solde :
+//   * une session Supabase active → registre COMMUN (solde partagé avec Pronos,
+//     Discipline, Centrale…) ;
+//   * sinon → registre LOCAL (l'app fonctionne seule, solde d'ouverture arbitraire).
+// Les deux exposent le même contrat : ni le Store ni l'interface ne changent.
 //
-//   import { createRegistre } from './eclats-registre.js';
-//   const registre = createRegistre();
-//
-// (Voir docs/INTEGRATION-ECLATS.md : la bascule reste conditionnée à
-// l'exécution de la migration et à l'ajout d'un écran de connexion.)
+// La connexion / déconnexion se fait depuis l'écran « Mes Éclats » (voir
+// window.Registre, exposé ci-dessous, utilisé par app.js).
 
+import { createRegistre } from './eclats-registre.js';
 import { createRegistreLocal } from './eclats-local.js';
 import { createCagnottesEclats } from './eclats-cagnottes.js';
 import { creerStore } from './store.js';
 
 const uid = () => U.uid();
 
-const registre = createRegistreLocal({ uid });
+// Client du registre commun (Supabase) : toujours instancié, car il porte la
+// connexion. Il n'est utilisé comme source du solde que si une session existe.
+const partage = createRegistre();
+window.Registre = partage;
+
+const registre = partage.estConnecte() ? partage : createRegistreLocal({ uid });
 const eclats = createCagnottesEclats({ ledger: registre, uid });
 
 /* Compte rendu de la bascule euro → Éclats, affiché une fois l'app prête. */

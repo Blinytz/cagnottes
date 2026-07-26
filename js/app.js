@@ -125,6 +125,17 @@ const App = (() => {
         location.hash = '#/eclats';
         break;
 
+      case 'connexion':
+        ouvrirConnexion();
+        break;
+
+      case 'deconnexion':
+        if (await Views.confirmDialog('Te déconnecter du registre commun ? Cagnottes repassera en <strong>mode local</strong> (solde tenu par l’app seule).', { okLabel: 'Se déconnecter' })) {
+          window.Registre.deconnexion();
+          location.reload();
+        }
+        break;
+
       case 'open-cagnotte':
         /* Ignore le clic s'il vient d'un bouton ou du handle de drag */
         if (e.target.closest('button') || e.target.closest('[data-drag]')) return;
@@ -238,6 +249,24 @@ const App = (() => {
     }
   });
 
+  /* ---------- Connexion au registre commun ---------- */
+
+  function ouvrirConnexion() {
+    Views.openModal(`
+      <h2 class="modal-title">Se connecter au registre commun ✦</h2>
+      <p class="hint">Utilise le <strong>même compte que Pronos</strong>. Ton solde d'Éclats
+        sera alors partagé entre toutes tes applications.</p>
+      <p class="hint warn">Tes engagements de test locaux repartiront de zéro sur le vrai
+        solde. Tes cagnottes (noms, objectifs) sont conservées.</p>
+      <form id="form-connexion" class="form-modal">
+        <label>Adresse e-mail
+          <input type="email" name="email" required autocomplete="username" inputmode="email" placeholder="ton@email"></label>
+        <label>Mot de passe
+          <input type="password" name="motdepasse" required autocomplete="current-password" placeholder="••••••••"></label>
+        <button type="submit" class="btn primary wide">Se connecter</button>
+      </form>`);
+  }
+
   function telecharger(contenu, nom) {
     const blob = new Blob([contenu], { type: 'application/json' });
     const a = document.createElement('a');
@@ -276,6 +305,27 @@ const App = (() => {
 
   document.addEventListener('submit', async e => {
     const form = e.target;
+
+    /* Connexion au registre commun (Supabase) */
+    if (form.id === 'form-connexion') {
+      e.preventDefault();
+      const email = form.email.value.trim();
+      const mdp = form.motdepasse.value;
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Connexion…';
+      try {
+        await window.Registre.connexion(email, mdp);
+        /* Les engagements de TEST locaux ne correspondent pas au registre commun :
+           on repart de zéro sur le vrai solde (les cagnottes restent). */
+        localStorage.removeItem('cagnottes_eclats_v1');
+        localStorage.removeItem('cagnottes_eclats_local_v1');
+        location.reload();
+      } catch (err) {
+        btn.disabled = false; btn.textContent = 'Se connecter';
+        toast('❌ ' + U.esc(err.message || 'Connexion refusée'), 'error');
+      }
+      return;
+    }
 
     /* Création / édition de cagnotte */
     if (form.id === 'form-cagnotte') {

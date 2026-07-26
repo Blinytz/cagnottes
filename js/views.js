@@ -297,6 +297,8 @@ const Views = (() => {
     const engage = Store.totalEngage();
     const recompense = Store.totalRecompense();
     const local = !!Store.registre.estLocal;
+    const emailConnecte = (!local && typeof Store.registre.utilisateur === 'function')
+      ? (Store.registre.utilisateur()?.email || '') : '';
     const souffrance = Store.eclats.enSouffrance();
 
     const rejeuHTML = souffrance.length ? `
@@ -352,8 +354,10 @@ const Views = (() => {
         ${local ? `<p class="hint warn">⏳ Registre <strong>local</strong> : le solde est tenu
           par cette application seule, en attendant le raccordement au registre commun.
           Le solde d'ouverture a été fixé arbitrairement et sera corrigé lors de la
-          synchronisation avec Centrale.</p>`
-        : `<p class="hint">✓ Connecté au registre commun de l'écosystème.</p>`}
+          synchronisation avec Centrale.</p>
+        <button class="btn primary wide" data-action="connexion">Se connecter au registre commun</button>`
+        : `<p class="hint">✓ Connecté au registre commun de l'écosystème${emailConnecte ? ` · <strong>${U.esc(emailConnecte)}</strong>` : ''}.</p>
+        <button class="btn secondary wide" data-action="deconnexion">Se déconnecter</button>`}
       </div>
     </section>`;
   }
