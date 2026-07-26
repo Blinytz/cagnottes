@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Réparer Cagnottes</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f5f0e8;
+         color: #2b2620; margin: 0; padding: 28px 20px; line-height: 1.55; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { font-size: 15px; color: #5c554b; }
+  button { display: block; width: 100%; margin: 22px 0 10px; padding: 15px;
+           font-size: 16px; font-weight: 700; color: #fff; background: #7a6234;
+           border: 0; border-radius: 12px; }
+  button:disabled { opacity: .6; }
+  #etat { font-size: 14px; white-space: pre-line; margin-top: 14px;
+          padding: 12px; border-radius: 10px; background: #fff; border: 1px solid #e2dbcd; }
+  a { color: #7a6234; }
+</style>
+</head>
+<body>
+  <h1>Réparer Cagnottes</h1>
+  <p>Si l'application affiche une erreur ou reste bloquée sur une ancienne
+    version, ce bouton remet tout à zéro côté navigateur.</p>
+  <p><strong>Tes données sont conservées</strong> : cagnottes, versements et Éclats
+    ne sont pas touchés. Seul le cache de l'application est vidé.</p>
+
+  <button id="btn">Réparer et rouvrir l'application</button>
+  <div id="etat">En attente…</div>
+  <p><a href="./">← Retour à l'application</a></p>
+
+<script>
+const etat = document.getElementById('etat');
+const btn = document.getElementById('btn');
+const dire = (m) => { etat.textContent += '\n' + m; };
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  etat.textContent = 'Réparation en cours…';
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+      dire('✓ Service worker désinscrit (' + regs.length + ')');
+    }
+    if (window.caches) {
+      const cles = await caches.keys();
+      for (const c of cles) await caches.delete(c);
+      dire('✓ Caches vidés (' + cles.length + ')');
+    }
+    dire('✓ Terminé — réouverture…');
+    setTimeout(() => { location.replace('./?reparee=' + Date.now()); }, 900);
+  } catch (e) {
+    dire('✗ Échec : ' + (e && e.message ? e.message : e));
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 /* Service worker : pré-cache de tous les assets pour un fonctionnement 100 % hors-ligne.
    Incrémenter CACHE_VERSION à chaque mise à jour de l'app pour invalider l'ancien cache. */
-const CACHE_VERSION = 'cagnottes-v3-euros-4';
+const CACHE_VERSION = 'cagnottes-v3-euros-5';
 const ASSETS = [
   './',
   './index.html',
@@ -48,6 +48,12 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
 
+  /* Seule la page de l'application est gérée ici : toute autre page part
+     directement au réseau, pour ne jamais être servie depuis un cache abîmé. */
+  const chemin = new URL(e.request.url).pathname;
+  const estPageApp = chemin.endsWith('/') || chemin.endsWith('/index.html');
+  if (e.request.mode === 'navigate' && !estPageApp) return;
+
   if (e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request)
@@ -57,13 +63,16 @@ self.addEventListener('fetch', e => {
              Sans ce garde-fou, cette 404 devient la page de l'app, servie
              indéfiniment. En cas d'erreur, on préfère la copie en cache. */
           if (!resp || !resp.ok) {
-            return caches.match('./index.html').then(r => r || resp);
+            return caches.match('./index.html').then(r => (r && r.ok ? r : resp));
           }
           const clone = resp.clone();
           caches.open(CACHE_VERSION).then(c => c.put('./index.html', clone));
           return resp;
         })
-        .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+        /* Hors ligne : une copie invalide (404 héritée) n'est jamais servie. */
+        .catch(() => caches.match('./index.html')
+          .then(r => (r && r.ok ? r : caches.match('./')))
+          .then(r => (r && r.ok ? r : Response.error())))
     );
     return;
   }
