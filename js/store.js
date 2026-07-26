@@ -1,48 +1,45 @@
 // Store : état des cagnottes, persistance localStorage, logique métier.
 //
-// Depuis la bascule du 25/07/2026, tout est compté en **Éclats** et la Bourse
-// locale n'existe plus. Le solde disponible vient d'un registre d'Éclats
-// (local aujourd'hui, le registre commun de l'écosystème demain — même
-// contrat, voir `eclats-local.js` et `eclats-registre.js`).
+// Depuis la bascule du 26/07/2026, Cagnottes compte de nouveau en **EUROS**
+// (en centimes entiers). Les Éclats restent la monnaie de l'écosystème : ils
+// n'entrent dans Cagnottes que par une CONVERSION explicite, à un taux
+// fluctuant, qui alimente la **Bourse** (voir `bourse.js`).
+//
+//     Éclats communs ──(conversion au taux)──▶ Bourse (€) ──▶ Cagnottes (€)
 //
 // Répartition des responsabilités :
 //   * ce module détient les données MÉTIER d'une cagnotte (nom, image,
 //     objectif, palier, statut, ordre, dates) ;
-//   * le journal des versements (`eclats-cagnottes.js`) est la SOURCE DE VÉRITÉ
-//     comptable : le montant d'une cagnotte, ses mouvements et son historique
-//     en sont dérivés, jamais recopiés. C'est ce qui permettra de brancher le
-//     registre commun sans rien changer à l'interface.
+//   * le journal des versements (`eclats-cagnottes.js`, branché sur la Bourse)
+//     est la SOURCE DE VÉRITÉ comptable : le montant d'une cagnotte, ses
+//     mouvements et son historique en sont dérivés, jamais recopiés.
 //
-// Les opérations d'argent sont donc asynchrones : elles ne sont acquises
-// qu'une fois confirmées par le registre.
+// Les versements ne dépendent plus du réseau : la Bourse est locale. Seule la
+// conversion d'Éclats parle au registre commun.
 
 import {
-  convertirEtatV1, etatInitial, estFormatEuro,
-  VERSION_ECLATS, CLE_ETAT, CLE_SAUVEGARDE_EURO,
-} from './eclats-migration.js';
-import { LEDGER_STORAGE_KEY } from './eclats-local.js';
+  VERSION_EUROS, CLE_SAUVEGARDE_ECLATS,
+  estFormatEclats, convertirEtatEnEuros, etatInitialEuros, planRemboursement,
+} from './bascule-euros.js';
 
-export function creerStore({ eclats, registre, onMigration = null }) {
+export const CLE_ETAT = 'cagnottes_app_state_v1';
+
+export function creerStore({
+  versements,        // contrôleur de versements, branché sur la Bourse (centimes)
+  bourse,            // Bourse en euros
+  ancienVersements,  // contrôleur historique, branché sur le registre commun
+  onBasculeRequise = null,
+}) {
   const listeners = [];
   let state = null;
-  let soldeCache = 0;
 
-  /* ---------- État par défaut & persistance ---------- */
+  /* ---------- Dérivées : le montant d'une cagnotte vient du journal ---------- */
 
-  function defaultState() {
-    return { version: VERSION_ECLATS, cagnottes: [], ordreManuel: false };
-  }
-
-  /*
-   * Les valeurs comptables d'une cagnotte sont des vues sur le journal des
-   * versements. Non énumérables : elles ne sont donc jamais persistées, ce qui
-   * rend impossible toute divergence entre l'affichage et le registre.
-   */
   function brancherDerivees(c) {
     const def = (nom, get) =>
       Object.defineProperty(c, nom, { get, enumerable: false, configurable: true });
-    def('montantActuel', () => eclats.engageDe(c.id));
-    def('mouvements', () => eclats.evenementsDe(c.id));
+    def('montantActuel', () => versements.engageDe(c.id));
+    def('mouvements', () => versements.evenementsDe(c.id));
     def('historiqueJournalier', () => historiqueDe(c.id));
     return c;
   }
@@ -62,14 +59,11 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     });
   }
 
-  /* Garantit la présence de tous les champs attendus (robustesse import/versions) */
   function normalize(s) {
-    const d = defaultState();
     return {
-      version: VERSION_ECLATS,
+      version: VERSION_EUROS,
       ordreManuel: !!(s && s.ordreManuel),
-      cagnottes: (Array.isArray(s && s.cagnottes) ? s.cagnottes : d.cagnottes)
-        .map(normaliserCagnotte),
+      cagnottes: (Array.isArray(s && s.cagnottes) ? s.cagnottes : []).map(normaliserCagnotte),
     };
   }
 
@@ -91,39 +85,31 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     listeners.forEach(fn => fn(state));
   }
 
-  /* ---------- Solde d'Éclats ---------- */
+  /* ---------- Argent : la Bourse, en centimes ---------- */
 
-  /*
-   * Le solde n'est jamais stocké côté client : il est lu du registre. On en
-   * garde un cache pour le rendu synchrone, rafraîchi après chaque opération.
-   */
-  async function rafraichirSolde() {
-    try { soldeCache = U.ent(await registre.solde()); }
-    catch (e) { console.warn('Solde indisponible :', e); }
-    return soldeCache;
-  }
+  /* Euros disponibles dans la Bourse (centimes). Synchrone : tout est local. */
+  function soldeDisponible() { return bourse.soldeCentimes(); }
 
-  function soldeDisponible() { return soldeCache; }
+  /* Conservé pour compatibilité : plus rien à attendre, la Bourse est locale. */
+  async function rafraichirSolde() { return soldeDisponible(); }
 
-  /* Éclats immobilisés dans les cagnottes encore ouvertes */
   function totalEngage() {
     return state.cagnottes
       .filter(c => c.statut !== 'archivée')
-      .reduce((s, c) => s + eclats.engageDe(c.id), 0);
+      .reduce((s, c) => s + versements.engageDe(c.id), 0);
   }
 
-  /* Éclats déjà transformés en récompenses (cagnottes validées) */
   function totalRecompense() {
     return state.cagnottes
       .filter(c => c.statut === 'archivée')
-      .reduce((s, c) => s + eclats.engageDe(c.id), 0);
+      .reduce((s, c) => s + versements.engageDe(c.id), 0);
   }
 
   /* ---------- Historique journalier (dérivé du journal) ---------- */
 
   function historiqueDe(cagnotteId) {
     const parJour = new Map();
-    eclats.evenementsDe(cagnotteId).forEach(e => {
+    versements.evenementsDe(cagnotteId).forEach(e => {
       const k = U.todayKey(new Date(e.date));
       parJour.set(k, U.ent((parJour.get(k) || 0) + e.montant));
     });
@@ -139,18 +125,14 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     c.statut = (c.montantActuel >= c.objectif) ? 'en_attente_validation' : 'en_cours';
   }
 
-  /*
-   * Alimente une cagnotte : consomme des Éclats disponibles. Le débit est
-   * plafonné au solde et n'est acquis qu'après confirmation du registre.
-   */
+  /* Alimente une cagnotte depuis la Bourse. Plafonné au solde disponible. */
   async function alimenter(cagnotteId, montantDemande, note = '') {
     const c = getCagnotte(cagnotteId);
     if (!c) return { ok: false, reason: 'introuvable' };
     if (!Number.isFinite(montantDemande) || montantDemande <= 0) return { ok: false, reason: 'montant_invalide' };
     if (c.statut === 'archivée') return { ok: false, reason: 'archivee' };
 
-    const res = await eclats.verser(cagnotteId, U.ent(montantDemande), note);
-    await rafraichirSolde();
+    const res = await versements.verser(cagnotteId, U.ent(montantDemande), note);
     if (!res.ok) { notify(); return res; }
     majStatutApresMouvement(c);
     notify();
@@ -158,35 +140,47 @@ export function creerStore({ eclats, registre, onMigration = null }) {
   }
 
   /*
-   * Retire des Éclats d'une cagnotte en annulant son dernier versement encore
-   * engagé. Le registre rembourse par référence, en tout-ou-rien : on ne peut
-   * pas retirer un montant arbitraire, seulement défaire un versement.
+   * Retire de la cagnotte en annulant son dernier versement encore engagé.
+   * Le journal rembourse par référence, en tout-ou-rien.
    */
   async function retirer(cagnotteId, note = '') {
     const c = getCagnotte(cagnotteId);
     if (!c) return { ok: false, reason: 'introuvable' };
     if (c.statut === 'archivée') return { ok: false, reason: 'archivee' };
-    const dernier = eclats.dernierAnnulable(cagnotteId);
+    const dernier = versements.dernierAnnulable(cagnotteId);
     if (!dernier) return { ok: false, reason: 'cagnotte_vide' };
     return annulerVersement(dernier.id, note ? `Retrait : ${note}` : 'Retrait de la cagnotte');
   }
 
   async function annulerVersement(versementId, motif = 'Annulation du versement') {
-    const rec = eclats.versement(versementId);
+    const rec = versements.versement(versementId);
     if (!rec) return { ok: false, reason: 'introuvable' };
     const c = getCagnotte(rec.cagnotteId);
-    const res = await eclats.annuler(versementId, motif);
-    await rafraichirSolde();
+    const res = await versements.annuler(versementId, motif);
     if (!res.ok) { notify(); return res; }
     if (c) majStatutApresMouvement(c);
     notify();
     return { ok: true, effectif: res.amount };
   }
 
-  /* Prochain montant retiré par le bouton « − » (null si rien à annuler) */
   function prochainRetrait(cagnotteId) {
-    const v = eclats.dernierAnnulable(cagnotteId);
+    const v = versements.dernierAnnulable(cagnotteId);
     return v ? v.amount : null;
+  }
+
+  /* ---------- Conversion Éclats → euros ---------- */
+
+  /* Convertit des Éclats du registre commun en euros dans la Bourse. */
+  async function convertirEclats(montantEclats) {
+    const res = await bourse.convertir(montantEclats);
+    notify();
+    return res;
+  }
+
+  async function reprendreConversion(conversionId) {
+    const res = await bourse.reprendre(conversionId);
+    notify();
+    return res;
   }
 
   /* ---------- CRUD cagnottes ---------- */
@@ -217,28 +211,21 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     notify();
   }
 
-  /*
-   * Suppression : les Éclats encore engagés sont rendus au registre (un
-   * remboursement par versement). Si l'un d'eux échoue, on n'efface rien :
-   * mieux vaut une cagnotte encore là qu'des Éclats perdus.
-   */
+  /* Suppression : les euros encore engagés retournent à la Bourse. */
   async function deleteCagnotte(id) {
     const c = getCagnotte(id);
     if (!c) return { ok: false, reason: 'introuvable' };
 
     let rendus = 0;
     if (c.statut !== 'archivée') {
-      const aRembourser = eclats.annulablesDe(id);
-      for (const v of aRembourser) {
-        const res = await eclats.annuler(v.id, `Suppression de la cagnotte « ${c.nom} »`);
+      for (const v of versements.annulablesDe(id)) {
+        const res = await versements.annuler(v.id, `Suppression de la cagnotte « ${c.nom} »`);
         if (!res.ok) {
-          await rafraichirSolde();
           notify();
           return { ok: false, reason: 'remboursement_incomplet', rendus, message: res.message };
         }
         rendus += res.amount;
       }
-      await rafraichirSolde();
     }
 
     state.cagnottes = state.cagnottes.filter(x => x.id !== id);
@@ -248,8 +235,7 @@ export function creerStore({ eclats, registre, onMigration = null }) {
 
   /*
    * Validation d'une cagnotte à 100 % : archivage. Aucune écriture comptable —
-   * les Éclats ont déjà été dépensés au moment des versements ; la cagnotte
-   * cesse simplement d'être annulable.
+   * les euros ont déjà quitté la Bourse au moment des versements.
    */
   function validerCagnotte(id) {
     const c = getCagnotte(id);
@@ -275,7 +261,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     if (state.ordreManuel) {
       return actives.sort((a, b) => a.ordreAffichage - b.ordreAffichage);
     }
-    // Tri par défaut : % d'avancement décroissant
     return actives.sort((a, b) => (b.montantActuel / b.objectif) - (a.montantActuel / a.objectif));
   }
 
@@ -285,7 +270,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
       .sort((a, b) => new Date(b.dateArchivage) - new Date(a.dateArchivage));
   }
 
-  /* Applique un nouvel ordre manuel (liste d'ids dans l'ordre d'affichage) */
   function reordonner(ids) {
     ids.forEach((id, i) => {
       const c = getCagnotte(id);
@@ -302,20 +286,15 @@ export function creerStore({ eclats, registre, onMigration = null }) {
 
   /* ---------- Export / import ---------- */
 
-  /*
-   * La sauvegarde embarque le journal des versements ET le journal d'Éclats :
-   * sans eux, les versements ne seraient plus annulables (les clés
-   * d'idempotence sont locales).
-   */
   function exportJSON() {
     return JSON.stringify({
       app: 'cagnottes',
       exportDate: new Date().toISOString(),
-      version: VERSION_ECLATS,
-      unite: 'eclats',
+      version: VERSION_EUROS,
+      unite: 'centimes',
       state,
-      versements: eclats._etat().versements,
-      ledger: registre.estLocal ? registre._etat() : null,
+      versements: versements._etat().versements,
+      bourse: bourse._etat(),
     }, null, 2);
   }
 
@@ -328,48 +307,24 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     if (!s || typeof s !== 'object' || !Array.isArray(s.cagnottes)) {
       return { ok: false, reason: 'structure_invalide' };
     }
-
-    // Sauvegarde antérieure à la bascule : convertie au même taux (1 € = 100 ✦).
-    if (estFormatEuro(s)) {
-      const conv = convertirEtatV1(s, { uid: U.uid });
-      appliquer(conv);
-      return { ok: true, converti: true, rapport: conv.rapport };
+    if (Number(s.version) !== VERSION_EUROS) {
+      return { ok: false, reason: 'version_incompatible' };
     }
 
     state = normalize(s);
-    eclats.remplacerVersements(parsed.versements || {});
-    if (registre.estLocal && parsed.ledger) {
-      localStorage.setItem(LEDGER_STORAGE_KEY, JSON.stringify(parsed.ledger));
-      registre._recharger();
-    }
+    versements.remplacerVersements(parsed.versements || {});
     notify();
-    return { ok: true, converti: false };
-  }
-
-  function appliquer({ etat, versements, mouvements }) {
-    state = normalize(etat);
-    eclats.remplacerVersements(versements);
-    if (registre.estLocal) {
-      localStorage.removeItem(LEDGER_STORAGE_KEY);
-      registre._recharger();
-      (mouvements || []).forEach(m => registre._inserer(m));
-    }
-    notify();
+    return { ok: true };
   }
 
   function resetAll() {
-    const frais = etatInitial();
-    appliquer(frais);
-    return frais.rapport;
+    state = normalize(etatInitialEuros());
+    versements.remplacerVersements({});
+    notify();
   }
 
   /* ---------- Séries & estimations ---------- */
 
-  /*
-   * Transforme un historiqueJournalier (deltas) en série de soldes cumulés,
-   * un point par jour calendaire, du début (ou du début de la fenêtre) à aujourd'hui.
-   * rangeDays = null → depuis le début.
-   */
   function balanceSeries(histo, rangeDays = null) {
     if (!histo.length) return [];
     const sorted = [...histo].sort((a, b) => a.date.localeCompare(b.date));
@@ -380,7 +335,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     if (rangeDays) {
       const winStart = U.todayKey(U.addDays(new Date(), -(rangeDays - 1)));
       if (winStart > startKey) {
-        // Solde accumulé avant la fenêtre
         base = sorted.filter(p => p.date < winStart).reduce((s, p) => U.ent(s + p.delta), 0);
         startKey = winStart;
       }
@@ -397,11 +351,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     return serie;
   }
 
-  /*
-   * Estimation "objectif atteint dans X jours" à partir de la moyenne des
-   * deltas journaliers sur les 14 derniers jours. Nécessite ≥ 3 jours de
-   * données distincts.
-   */
   function estimation(c) {
     const histo = c.historiqueJournalier;
     const jours = new Set(histo.map(p => p.date));
@@ -429,7 +378,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     const archivees = cagnottesArchivees();
     const enCours = all.filter(c => c.statut !== 'archivée');
 
-    // Éclats moyens cagnottés par jour (versements / jours depuis le premier)
     let moyenneJour = null;
     const tousMouvements = all.flatMap(c => c.mouvements);
     if (tousMouvements.length) {
@@ -439,7 +387,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
       moyenneJour = U.ent(totalApports / nbJours);
     }
 
-    // Temps moyen de clôture + cagnotte la plus rapide
     let tempsMoyenJours = null, plusRapide = null;
     if (archivees.length) {
       const durees = archivees.map(c => ({
@@ -450,7 +397,6 @@ export function creerStore({ eclats, registre, onMigration = null }) {
       plusRapide = durees.sort((a, b) => a.jours - b.jours)[0];
     }
 
-    // Jour de la semaine le plus actif (≥ 7 versements pour être significatif)
     let meilleurJour = null;
     const apports = tousMouvements.filter(m => m.montant > 0);
     if (apports.length >= 7) {
@@ -460,12 +406,13 @@ export function creerStore({ eclats, registre, onMigration = null }) {
       meilleurJour = { jour: U.jourSemaine(idx), montant: U.ent(parJour[idx]) };
     }
 
-    // Série d'évolution du total toutes cagnottes confondues
     const deltasFusionnes = new Map();
     all.forEach(c => c.historiqueJournalier.forEach(p => {
       deltasFusionnes.set(p.date, U.ent((deltasFusionnes.get(p.date) || 0) + p.delta));
     }));
     const histoGlobal = [...deltasFusionnes.entries()].map(([date, delta]) => ({ date, delta }));
+
+    const conv = bourse.totaux();
 
     return {
       moyenneJour,
@@ -477,41 +424,78 @@ export function creerStore({ eclats, registre, onMigration = null }) {
       totalRecompense: totalRecompense(),
       plusRapide,
       meilleurJour,
-      histoGlobal
+      histoGlobal,
+      nbConversions: conv.nb,
+      eclatsConvertis: conv.eclats,
+      eurosObtenus: conv.centimes,
     };
   }
 
-  /* ---------- Chargement initial & bascule euro → Éclats ---------- */
+  /* ---------- Bascule Éclats → euros ---------- */
+
+  /*
+   * Rembourse tous les versements de test faits en Éclats, puis réétiquette
+   * l'état en euros. Rien n'est effacé tant que tous les remboursements ne sont
+   * pas confirmés : mieux vaut une bascule reportée que des Éclats perdus.
+   */
+  async function basculerVersEuros() {
+    const ancien = lireBrut();
+    if (!estFormatEclats(ancien)) return { ok: false, reason: 'pas_de_bascule' };
+
+    const plan = planRemboursement(ancienVersements ? ancienVersements._etat().versements : {});
+    let rembourses = 0;
+    for (const v of plan.versements) {
+      const res = await ancienVersements.annuler(v.id, 'Retour aux euros : remboursement des tests');
+      if (!res.ok) {
+        return {
+          ok: false, reason: 'remboursement_incomplet',
+          rembourses, restants: plan.nb - rembourses, message: res.message,
+        };
+      }
+      rembourses += res.amount;
+    }
+
+    // Copie de sécurité de l'état « tout en Éclats » avant réécriture.
+    try { localStorage.setItem(CLE_SAUVEGARDE_ECLATS, JSON.stringify(ancien)); }
+    catch (e) { console.warn('Copie de sauvegarde Éclats impossible :', e); }
+
+    const conv = convertirEtatEnEuros(ancien);
+    state = normalize(conv.etat);
+    versements.remplacerVersements({});   // la Bourse démarre à 0 €
+    notify();
+    return {
+      ok: true,
+      eclatsRembourses: rembourses,
+      nbVersements: plan.nb,
+      ...conv.rapport,
+    };
+  }
+
+  /* ---------- Chargement initial ---------- */
+
+  function lireBrut() {
+    try { return JSON.parse(localStorage.getItem(CLE_ETAT) || 'null'); }
+    catch { return null; }
+  }
 
   function charger() {
-    let brut = null;
-    try { brut = JSON.parse(localStorage.getItem(CLE_ETAT) || 'null'); }
+    let brut;
+    try { brut = lireBrut(); }
     catch (e) {
       console.error('État localStorage corrompu, réinitialisation :', e);
-      const frais = etatInitial();
-      appliquer(frais);
+      state = normalize(etatInitialEuros());
       state._corrupted = true;
       return;
     }
 
-    if (!brut) {
-      // Installation neuve : pas de conversion, juste le solde d'ouverture.
-      const frais = etatInitial();
-      state = normalize(frais.etat);
-      if (registre.estLocal && !registre._etat().mouvements.length) {
-        frais.mouvements.forEach(m => registre._inserer(m));
-      }
-      save();
-      return;
-    }
+    if (!brut) { state = normalize(etatInitialEuros()); save(); return; }
 
-    if (estFormatEuro(brut)) {
-      // Bascule : la copie euro d'origine est conservée avant toute écriture.
-      try { localStorage.setItem(CLE_SAUVEGARDE_EURO, JSON.stringify(brut)); }
-      catch (e) { console.warn('Copie de sauvegarde euro impossible :', e); }
-      const conv = convertirEtatV1(brut, { uid: U.uid });
-      appliquer(conv);
-      if (onMigration) onMigration(conv.rapport, brut);
+    if (estFormatEclats(brut)) {
+      // On n'écrit RIEN : la bascule exige de rembourser les Éclats d'abord,
+      // ce qui demande le réseau et l'accord de l'utilisateur.
+      state = normalize(brut);
+      state._basculeRequise = true;
+      if (onBasculeRequise) onBasculeRequise();
       return;
     }
 
@@ -530,9 +514,10 @@ export function creerStore({ eclats, registre, onMigration = null }) {
     validerCagnotte, reactiverCagnotte,
     alimenter, retirer, annulerVersement, prochainRetrait,
     soldeDisponible, rafraichirSolde, totalEngage, totalRecompense,
+    convertirEclats, reprendreConversion, basculerVersEuros,
     reordonner, resetOrdre,
     balanceSeries, estimation, stats,
     exportJSON, importJSON, resetAll,
-    eclats, registre,
+    eclats: versements, bourse,
   };
 }

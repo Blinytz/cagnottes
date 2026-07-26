@@ -641,3 +641,25 @@ textarea:focus, input:focus { outline: none; border-color: var(--accent); }
   body { font-size: 15px; }
   .view { padding: 26px 20px 40px; }
 }
+
+/* ---------- Écran Change : taux de conversion Éclats → euros ---------- */
+.taux-entete { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.taux-valeur { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+.taux-zone { font-size: 11px; font-weight: 700; padding: 6px 11px; border-radius: 999px; text-align: right; }
+.taux-zone.zone-haute { background: #e8f6ef; color: #12694f; }
+.taux-zone.zone-basse { background: #fdeceb; color: #a5342f; }
+.taux-zone.zone-neutre { background: #f2f0e9; color: #6a6a63; }
+
+.graphe-taux { width: 100%; height: auto; display: block; margin: 6px 0 10px; }
+.courbe-taux { fill: none; stroke: #1f7a5e; stroke-width: 2; }
+.seuil { stroke-dasharray: 4 4; stroke-width: 1; }
+.seuil-haut { stroke: #d9a520; }
+.seuil-bas { stroke: #c9524c; }
+.txt-graphe { font-size: 9px; fill: #8a8a80; }
+.point-taux { fill: #1f7a5e; }
+
+.conv-apercu { margin: 10px 0; padding: 11px 13px; border-radius: 10px; background: #f6f4ee; font-size: 14px; }
+.conv-apercu.actif { background: #e8f6ef; color: #12694f; }
+
+.eclats-dispo-ligne { display: flex; flex-direction: column; gap: 3px; }
+.eclats-dispo-val { font-size: 22px; font-weight: 800; }

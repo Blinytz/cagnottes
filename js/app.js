@@ -22,7 +22,7 @@ const App = (() => {
     const h = location.hash.replace(/^#\/?/, '');
     const [seg, id] = h.split('/');
     if (seg === 'cagnotte' && id) return { name: 'cagnotte', id };
-    if (['stats', 'archives', 'eclats', 'reglages'].includes(seg)) return { name: seg };
+    if (['stats', 'archives', 'change', 'reglages'].includes(seg)) return { name: seg };
     return { name: 'home' };
   }
 
@@ -34,7 +34,7 @@ const App = (() => {
       cagnotte: () => Views.viewCagnotte(route.id),
       stats: () => Views.viewStats(),
       archives: () => Views.viewArchives(),
-      eclats: () => Views.viewEclats(),
+      change: () => Views.viewChange(),
       reglages: () => Views.viewReglages()
     }[route.name]();
     viewEl.innerHTML = html;
@@ -43,13 +43,21 @@ const App = (() => {
     Views.afterRender(route);
   }
 
-  /* Bandeau Éclats persistant : disponible temps réel + total engagé */
+  /* Bandeau Bourse persistant : euros disponibles + total engagé */
   function updateHeader() {
     const disponible = Store.soldeDisponible();
     const el = document.getElementById('eclats-header');
     el.classList.toggle('vide', disponible <= 0);
-    el.querySelector('.eh-solde').textContent = U.fmtEclats(disponible);
-    el.querySelector('.eh-engage').textContent = `${U.fmtEclats(Store.totalEngage())} engagés`;
+    el.querySelector('.eh-solde').textContent = U.fmtEuros(disponible);
+    el.querySelector('.eh-engage').textContent = `${U.fmtEuros(Store.totalEngage())} engagés`;
+  }
+
+  /* Rafraîchit la courbe et la valeur du taux sans redessiner tout l'écran. */
+  function majTaux() {
+    const graphe = document.getElementById('taux-graphe');
+    if (!graphe || !window.Taux) return;
+    Views.render && null;
+    render();
   }
 
   function updateNav(route) {
@@ -66,7 +74,7 @@ const App = (() => {
     const res = await Store.alimenter(id, c.palier);
     if (!res.ok) return signalerEchecVersement(res);
     if (res.ajuste) {
-      toast(`⚖️ Éclats insuffisants : seulement <strong>${U.fmtEclats(res.effectif)}</strong> versés (au lieu de ${U.fmtEclats(c.palier)}).`, 'warn');
+      toast(`⚖️ Bourse insuffisante : seulement <strong>${U.fmtEuros(res.effectif)}</strong> versés (au lieu de ${U.fmtEuros(c.palier)}).`, 'warn');
     }
     verifierObjectifAtteint(c);
   }
@@ -78,7 +86,7 @@ const App = (() => {
       else signalerEchecRemboursement(res);
       return;
     }
-    toast(`↩︎ Versement annulé : ${U.fmtEclats(res.effectif)} rendus.`, 'info');
+    toast(`↩︎ Versement annulé : ${U.fmtEuros(res.effectif)} rendus.`, 'info');
   }
 
   /*
@@ -88,9 +96,9 @@ const App = (() => {
    */
   function signalerEchecVersement(res) {
     if (res.reason === 'solde_insuffisant') {
-      toast('✦ Aucun Éclat disponible : le versement n’a pas été effectué.', 'error');
+      toast('💶 Bourse vide : le versement n’a pas été effectué. Convertis des Éclats depuis l’écran Change.', 'error');
     } else if (res.reason === 'reseau') {
-      toast('📡 Registre injoignable : le versement <strong>n’est pas comptabilisé</strong>. Tu peux le réessayer depuis l’écran Éclats.', 'error');
+      toast('📡 Opération non aboutie : le versement <strong>n’est pas comptabilisé</strong>. Tu peux le réessayer depuis l’écran Change.', 'error');
     } else if (res.reason === 'en_cours') {
       /* Double clic : on ignore silencieusement, le premier versement suit son cours. */
     } else if (res.reason === 'archivee') {
@@ -122,8 +130,34 @@ const App = (() => {
 
     switch (action) {
       case 'goto-eclats':
-        location.hash = '#/eclats';
+        location.hash = '#/change';
         break;
+
+      case 'lancer-bascule': await lancerBascule(); break;
+
+      case 'set-fenetre-taux':
+        Views.setFenetreChange(actEl.dataset.heures);
+        render();
+        break;
+
+      case 'conv-tout': {
+        const hote = document.getElementById('eclats-dispo');
+        const champ = document.getElementById('conv-montant');
+        if (!hote || !champ) return;
+        const dispo = Number(hote.dataset.solde || 0);
+        if (!dispo) return toast('Aucun Éclat disponible à convertir.', 'error');
+        champ.value = String(dispo);
+        Views.majApercuConversion();
+        break;
+      }
+
+      case 'reprendre-conversion': {
+        const res = await Store.reprendreConversion(id);
+        render();
+        if (res.ok) toast(`✅ Conversion confirmée : ${U.fmtEuros(res.centimes)}.`, 'success');
+        else toast('📡 Registre injoignable : conversion non effectuée.', 'error');
+        break;
+      }
 
       case 'connexion':
         ouvrirConnexion();
@@ -149,9 +183,9 @@ const App = (() => {
         e.stopPropagation();
         const v = Store.eclats.versement(id);
         if (!v) return;
-        if (await Views.confirmDialog(`Annuler ce versement de <strong>${U.fmtEclats(v.amount)}</strong> ? Les Éclats retournent au registre.`, { okLabel: 'Annuler le versement' })) {
+        if (await Views.confirmDialog(`Annuler ce versement de <strong>${U.fmtEuros(v.amount)}</strong> ? L'argent retourne dans la Bourse.`, { okLabel: 'Annuler le versement' })) {
           const res = await Store.annulerVersement(id);
-          if (res.ok) toast(`↩︎ ${U.fmtEclats(res.effectif)} rendus.`, 'info');
+          if (res.ok) toast(`↩︎ ${U.fmtEuros(res.effectif)} rendus.`, 'info');
           else signalerEchecRemboursement(res);
         }
         break;
@@ -161,7 +195,7 @@ const App = (() => {
         const res = await Store.eclats.reprendre(id);
         await Store.rafraichirSolde();
         App.render();
-        if (res.ok) toast(`✅ Versement confirmé : ${U.fmtEclats(res.amount)}.`, 'success');
+        if (res.ok) toast(`✅ Versement confirmé : ${U.fmtEuros(res.amount)}.`, 'success');
         else signalerEchecVersement(res);
         break;
       }
@@ -173,11 +207,11 @@ const App = (() => {
         const c = Store.getCagnotte(id);
         if (!c) return;
         const extra = (c.montantActuel > 0 && c.statut !== 'archivée')
-          ? ` Les ${U.fmtEclats(c.montantActuel)} qu'elle contient retourneront au registre.` : '';
+          ? ` Les ${U.fmtEuros(c.montantActuel)} qu'elle contient retourneront dans la Bourse.` : '';
         if (await Views.confirmDialog(`Supprimer définitivement « ${U.esc(c.nom)} » ?${extra}`, { danger: true, okLabel: 'Supprimer' })) {
           const res = await Store.deleteCagnotte(id);
           if (res.ok) {
-            toast(res.rendus ? `Cagnotte supprimée · ${U.fmtEclats(res.rendus)} rendus.` : 'Cagnotte supprimée.');
+            toast(res.rendus ? `Cagnotte supprimée · ${U.fmtEuros(res.rendus)} rendus.` : 'Cagnotte supprimée.');
             location.hash = '#/';
           } else if (res.reason === 'remboursement_incomplet') {
             toast('📡 Registre injoignable : la cagnotte n’a pas été supprimée pour ne perdre aucun Éclat. Réessaie dans un moment.', 'error');
@@ -327,12 +361,42 @@ const App = (() => {
       return;
     }
 
+    /* Conversion d'Éclats en euros (définitive) */
+    if (form.id === 'form-conversion') {
+      e.preventDefault();
+      const champ = document.getElementById('conv-montant');
+      const montant = U.parseEclats(champ.value);
+      if (!Number.isFinite(montant) || montant <= 0) {
+        return toast('Indique un nombre d’Éclats à convertir.', 'error');
+      }
+      const sim = Store.bourse.simuler(montant);
+      const ok = await Views.confirmDialog(
+        `Convertir <strong>${U.fmtEclats(sim.eclats)}</strong> en
+         <strong>${U.fmtEuros(sim.centimes)}</strong> au taux ×${sim.taux.toFixed(2)} ?<br>
+         <span class="muted small">Cette opération est définitive.</span>`,
+        { okLabel: 'Convertir' });
+      if (!ok) return;
+      const res = await Store.convertirEclats(montant);
+      render();
+      if (res.ok) {
+        toast(res.ajuste
+          ? `⚖️ Éclats insuffisants : ${U.fmtEclats(res.eclats)} convertis en ${U.fmtEuros(res.centimes)}.`
+          : `💶 ${U.fmtEclats(res.eclats)} convertis en ${U.fmtEuros(res.centimes)}.`,
+          res.ajuste ? 'warn' : 'success');
+      } else if (res.reason === 'eclats_insuffisants') {
+        toast('✦ Aucun Éclat disponible à convertir.', 'error');
+      } else if (res.reason === 'reseau') {
+        toast('📡 Registre injoignable : <strong>rien n’a été converti</strong>. Réessaie depuis l’écran Change.', 'error');
+      }
+      return;
+    }
+
     /* Création / édition de cagnotte */
     if (form.id === 'form-cagnotte') {
       e.preventDefault();
       const nom = form.nom.value.trim();
-      const objectif = U.parseEclats(form.objectif.value);
-      const palier = U.parseEclats(form.palier.value);
+      const objectif = U.parseEuros(form.objectif.value);
+      const palier = U.parseEuros(form.palier.value);
       if (!nom) return toast('Le nom est obligatoire.', 'error');
       if (!(objectif > 0)) return toast('L’objectif doit être un nombre d’Éclats positif.', 'error');
       if (!(palier > 0)) return toast('Le palier doit être un nombre d’Éclats positif.', 'error');
@@ -356,7 +420,7 @@ const App = (() => {
       e.preventDefault();
       const id = form.dataset.id;
       const c = Store.getCagnotte(id);
-      const montant = U.parseEclats(form.montant.value);
+      const montant = U.parseEuros(form.montant.value);
       const note = form.note.value.trim();
       if (!Number.isFinite(montant) || montant <= 0) {
         return toast('Montant invalide : indique un nombre d’Éclats positif.', 'error');
@@ -364,10 +428,15 @@ const App = (() => {
       const res = await Store.alimenter(id, montant, note);
       if (!res.ok) return signalerEchecVersement(res);
       toast(res.ajuste
-        ? `⚖️ Éclats insuffisants : seulement <strong>${U.fmtEclats(res.effectif)}</strong> versés (au lieu de ${U.fmtEclats(montant)}).`
-        : `+${U.fmtEclats(res.effectif)} versés 💪`, res.ajuste ? 'warn' : 'success');
+        ? `⚖️ Éclats insuffisants : seulement <strong>${U.fmtEuros(res.effectif)}</strong> versés (au lieu de ${U.fmtEuros(montant)}).`
+        : `+${U.fmtEuros(res.effectif)} versés 💪`, res.ajuste ? 'warn' : 'success');
       verifierObjectifAtteint(c);
     }
+  });
+
+  /* Aperçu en direct de la conversion pendant la saisie */
+  document.addEventListener('input', e => {
+    if (e.target.id === 'conv-montant') Views.majApercuConversion();
   });
 
   /* Sauvegarde de la description à la volée (au blur) */
@@ -411,5 +480,39 @@ const App = (() => {
     }
   }
 
-  return { init, render };
+  /*
+   * Passage aux euros : les versements de test faits en Éclats sont d'abord
+   * remboursés au registre commun. Rien n'est réécrit tant que ce n'est pas
+   * confirmé — mieux vaut une bascule reportée que des Éclats perdus.
+   */
+  function proposerBascule() {
+    Views.openModal(`
+      <h2 class="modal-title">Cagnottes repasse aux euros 💶</h2>
+      <p>Une cagnotte « 600 € », c'est plus parlant que « 60 000 ✦ ». Désormais tes
+        cagnottes sont en euros, et les Éclats se <strong>convertissent</strong> en euros
+        à un taux qui varie entre ×0,60 et ×1,40 — à toi de choisir le bon moment.</p>
+      <p class="hint">Tes versements de test seront <strong>intégralement remboursés</strong>
+        en Éclats. Tes cagnottes, objectifs et images sont conservés ; elles repartent
+        simplement à zéro.</p>
+      <button class="btn primary wide" data-action="lancer-bascule">Rembourser mes Éclats et passer aux euros</button>`);
+  }
+
+  async function lancerBascule() {
+    if (!window.Registre || !window.Registre.estConnecte()) {
+      return toast('Connecte-toi d’abord au registre commun pour être remboursé.', 'error');
+    }
+    const res = await Store.basculerVersEuros();
+    if (res.ok) {
+      Views.closeModal();
+      render();
+      toast(res.eclatsRembourses
+        ? `✅ ${U.fmtEclats(res.eclatsRembourses)} rendus · Cagnottes est en euros.`
+        : '✅ Cagnottes est en euros.', 'success');
+      location.hash = '#/';
+    } else if (res.reason === 'remboursement_incomplet') {
+      toast('📡 Registre injoignable : rien n’a été modifié, réessaie dans un moment.', 'error');
+    }
+  }
+
+  return { init, render, majTaux, proposerBascule };
 })();

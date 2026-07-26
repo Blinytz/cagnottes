@@ -51,16 +51,18 @@ export function createCagnottesEclats({
   storage,
   uid = defaultUid,
   now = () => new Date().toISOString(),
+  cle = ETAT_STORAGE_KEY,
 } = {}) {
   if (!ledger) throw new Error('Un client de registre (ledger) est requis.');
   const store = storage
     || (typeof globalThis !== 'undefined' && globalThis.localStorage) || memoryStorage();
+  const ETAT_KEY = cle;
 
   const enCours = new Set(); // cagnotteId avec un versement en vol (garde double clic)
 
   function charger() {
     try {
-      const raw = store.getItem(ETAT_STORAGE_KEY);
+      const raw = store.getItem(ETAT_KEY);
       if (!raw) return { versements: {} };
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || typeof parsed.versements !== 'object') {
@@ -73,7 +75,7 @@ export function createCagnottesEclats({
   }
 
   let etat = charger();
-  function sauver() { store.setItem(ETAT_STORAGE_KEY, JSON.stringify(etat)); }
+  function sauver() { store.setItem(ETAT_KEY, JSON.stringify(etat)); }
 
   function cleSpend(id) { return `cagnottes:versement:${id}`; }
   function cleRefund(id) { return `cagnottes:remboursement:${id}`; }

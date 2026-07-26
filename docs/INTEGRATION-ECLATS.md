@@ -1,103 +1,89 @@
-# Intégration de Cagnottes au registre commun d'Éclats
+# Cagnottes : euros, Bourse et taux de change
 
-Cagnottes ne compte plus qu'en **Éclats**, cagnottes comprises. La « Bourse »
-locale a été supprimée : l'application ne crée jamais d'Éclats, elle en dépense
-et en rend. Le solde vient d'un **registre** — local aujourd'hui, le registre
-commun de l'écosystème (même projet Supabase que Pronos) dès que la migration
-sera exécutée.
+Cagnottes compte en **euros** (en centimes entiers). Les Éclats restent la
+monnaie de l'écosystème : ils n'entrent dans Cagnottes que par une
+**conversion explicite**, à un taux qui fluctue.
 
-## Ce qui est livré et branché
+```
+Éclats communs ──(conversion au taux du moment)──▶ Bourse (€) ──▶ Cagnottes (€)
+   Pronos, Discipline…              définitive              versements locaux
+```
+
+Décision du 26/07/2026 : une cagnotte « Téléphone à 600 € » est parlante,
+« 60 000 ✦ » ne l'est pas. La conversion introduit en plus un vrai choix —
+attendre un bon taux — repris du moteur de WikiDeck.
+
+## Le taux de change
+
+| Paramètre | Valeur |
+|---|---|
+| Parité de référence | 100 ✦ = 1 € au taux ×1.00 |
+| Bornes | ×0,60 à ×1,40 (100 ✦ valent 0,60 € à 1,40 €) |
+| Régimes | bas (40 %), haut (40 %), neutre (20 %), 20 min à 1 h 30 chacun |
+| Rythme | un pas toutes les 10 s, lissage + bruit |
+| Hors ligne | le temps écoulé est rejoué au retour (jusqu'à 7 jours) |
+| Courbe | 6 h · 12 h · 24 h · 2 j · 4 j · 7 j |
+
+Le taux est **local à l'appareil**, comme dans WikiDeck. Sur 7 jours simulés il
+parcourt toute la plage, avec une moyenne de 0,995 et 38 % du temps en zone haute.
+
+## Ce qui est livré
 
 | Fichier | Rôle |
 |---|---|
-| `js/eclats-registre.js` | Client du registre commun (auth mot de passe, RPC `eclats_balance` / `eclats_spend` / `eclats_refund` / `eclats_aggregates_by_app`). **Clé publishable uniquement**, aucun secret. |
-| `js/eclats-local.js` | Registre **local** au contrat identique, utilisé en attendant la bascule. Reproduit la sémantique SQL : plafond au solde, idempotence par clé, remboursement exactement-une-fois. |
-| `js/eclats-cagnottes.js` | Journal des versements : versement = dépense confirmée serveur ; annulation = remboursement exactement-une-fois ; états `en_attente` / `confirme` / `refuse` / `erreur` ; garde double-clic. |
-| `js/eclats-migration.js` | Bascule euro → Éclats (fonctions pures, sans effet de bord). |
-| `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient le solde.** |
-| `tests/` | 34 tests (`node --test "tests/*.test.mjs"`) : contrôleur, équivalence du registre local avec le SQL, bascule. |
+| `js/bourse-taux.js` | Moteur du taux : régimes, rattrapage hors-ligne, historique, courbe SVG, conversion en centimes. |
+| `js/bourse.js` | La Bourse : conversion Éclats → euros (dépense réelle d'Éclats + crédit en euros), journal des conversions. |
+| `js/bascule-euros.js` | Passage v2 (Éclats) → v3 (euros), fonctions pures. |
+| `js/eclats-local.js` | Journal local générique (clé paramétrable, `crediter` ajouté) — sert de Bourse. |
+| `js/eclats-cagnottes.js` | Journal des versements, branché sur la Bourse. |
+| `js/eclats-registre.js` | Client du registre commun (Supabase), pour les conversions. |
+| `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient l'argent.** |
+| `tests/` | 59 tests (`node --test`). |
 
-## La bascule vers le registre commun
+## Règles d'une conversion
 
-Une ligne dans `js/main.js` :
+- Elle **dépense réellement des Éclats** (`eclats_spend`, confirmée par le serveur).
+- **Tu choisis le montant** : une part de tes Éclats, pas forcément tout.
+- Le **taux est figé au moment de la demande**. Un rejeu après une panne réseau
+  applique le taux d'origine — sinon il suffirait d'attendre une hausse pour
+  s'enrichir sur un échec.
+- Les euros crédités portent sur les Éclats **réellement dépensés** (le registre
+  plafonne au solde disponible).
+- Elle est **définitive** : convertir bas puis annuler haut fabriquerait des
+  Éclats. Aucune annulation n'est proposée.
+- Elle est **idempotente** : double clic, rejeu ou rechargement ne convertissent
+  jamais deux fois.
 
-```js
-import { createRegistre } from './eclats-registre.js';
-const registre = createRegistre();   // au lieu de createRegistreLocal()
-```
+## La bascule vers les euros
 
-Ni le Store ni l'interface ne changent : les deux registres exposent le même
-contrat, et `tests/eclats-local.test.mjs` verrouille cette équivalence. Ce qui
-reste à faire côté produit :
+Détectée au démarrage si l'état est en version 2. Elle **rembourse d'abord au
+registre commun tous les versements faits en Éclats**, puis réétiquette l'état.
+Rien n'est réécrit tant que les remboursements ne sont pas confirmés : mieux vaut
+une bascule reportée que des Éclats perdus. Une copie de l'état « tout en Éclats »
+est conservée dans `cagnottes_sauvegarde_eclats_v2`.
 
-1. **Exécuter la migration** `apps/pronos/sql/registre_commun.sql` (voir
-   `registre_commun_backup / _verification / _rollback`). L'UI connectée **ne
-   doit pas** être publiée avant.
-2. **Ajouter un écran de connexion** Supabase (même compte que Pronos), en
-   réutilisant `eclats-registre.js`.
-3. **Reprendre le solde d'ouverture** : les 100 ✦ de départ ont été fixés
-   arbitrairement et devront être corrigés lors de la synchronisation avec
-   Centrale.
-4. **Décider du sort du journal local** : les mouvements tenus localement ne
-   sont pas transférés automatiquement dans le registre commun.
+Les cagnottes gardent nom, image, objectif, palier et ordre ; elles repartent
+vides. La Bourse démarre à 0 € : c'est à toi de convertir quand le taux te plaît.
 
-Tant que la bascule n'est pas faite, l'écran Éclats affiche explicitement
-« Registre local », pour qu'aucun solde ne soit présenté comme partagé alors
-qu'il ne l'est pas.
+> Détail utile : la bascule précédente valait 1 € = 100 ✦, donc **1 Éclat = 1
+> centime**. Les objectifs gardent leur valeur numérique — 60 000 ✦ *sont*
+> 600,00 €. Aucun arrondi, aucune perte.
 
-## Conversion des données euro (décision du 25/07/2026)
+## Dans l'interface
 
-Taux fixe **1 € = 100 ✦**, appliqué **une seule fois** à la première ouverture.
-Le taux rend tous les montants entiers sans perte, l'Éclat étant indivisible :
-0,50 € → 50 ✦, 60 € → 6 000 ✦.
-
-> Cette conversion **remplace** la règle « aucune conversion euro→Éclat
-> automatique » posée initialement dans `contracts/REGISTRE-PARTAGE.md`. Elle
-> est unique, explicite, et laisse derrière elle une copie intégrale des
-> données d'origine (`cagnottes_sauvegarde_euro_v1`, exportable depuis les
-> Réglages).
-
-L'historique n'est pas recopié mais **rejoué** en versements : un apport devient
-un versement confirmé daté, un retrait annule les versements les plus récents
-(LIFO) en re-versant le reliquat quand il ne consomme qu'une partie du dernier.
-Le journal reconstruit obéit donc exactement aux règles retenues pour l'avenir,
-avec les mêmes dates et les mêmes montants (×100). Le solde de chaque cagnotte
-est ensuite recalé sur le montant réellement affiché avant la bascule : c'est
-lui qui fait foi pour l'utilisateur, même si l'historique était incomplet.
-
-L'ancien solde de Bourse n'est **pas** reporté : il est remplacé par le solde
-d'ouverture. Le mouvement d'ouverture couvre ce solde **plus** tout ce qui est
-déjà engagé dans les cagnottes, faute de quoi le journal rejoué décrirait des
-dépenses sans provision.
-
-## Modèle appliqué dans l'UI
-
-- Le bandeau haut affiche le **solde disponible** et le **total engagé**.
-- L'écran **Éclats** (qui remplace l'onglet Bourse) montre disponible, engagé,
-  déjà récompensé, et la **répartition par application** — la même lecture que
-  Centrale, via `eclats_aggregates_by_app`.
-- « Verser » appelle `ec.verser()` : succès → montant réellement versé (peut
-  être plafonné) ; `solde_insuffisant` → message clair, rien n'est
-  comptabilisé ; `reseau` → état « erreur », bouton **Réessayer** sur l'écran
-  Éclats (`ec.reprendre`, même clé, donc jamais de double débit).
-- Le bouton « − » annule le **dernier versement encore engagé**, pour son
-  montant exact ; chaque versement est aussi annulable depuis la liste des
-  mouvements. Il n'existe pas de retrait d'un montant arbitraire : le registre
-  rembourse par référence, en tout-ou-rien.
-- **Supprimer une cagnotte** rembourse tous ses versements. Si l'un échoue,
-  rien n'est effacé — mieux vaut une cagnotte encore là que des Éclats perdus.
-- **Valider une cagnotte** n'écrit rien : les Éclats ont déjà été dépensés.
+- Le bandeau haut affiche la **Bourse en euros** et le total engagé.
+- L'onglet **Change** montre le taux en direct, sa zone (haute/basse/neutre), la
+  courbe avec choix de fenêtre, tes Éclats disponibles et leur équivalent au taux
+  courant, le champ de conversion avec **aperçu en direct**, et l'historique des
+  conversions.
+- Verser dans une cagnotte puise dans la **Bourse** : plus aucune dépendance au
+  réseau pour l'usage quotidien. Seule la conversion parle au registre commun.
+- Le « − » annule le dernier versement encore engagé, pour son montant exact.
 
 ## Garde-fous
 
 - Aucune clé `service_role` dans le navigateur.
-- Le solde n'est jamais stocké ni écrit côté client : il est la somme d'un
-  journal. Le montant d'une cagnotte est dérivé de ses versements, jamais
-  recopié — une divergence entre l'affichage et la comptabilité est donc
-  structurellement impossible.
-- Aucune écriture directe dans `eclats_ledger` : uniquement via les RPC
-  atomiques.
-- Une opération hors ligne n'est **jamais** présentée comme comptabilisée tant
-  que le registre ne l'a pas confirmée.
-- Effacer les données locales détruit les clés d'idempotence et rend les
-  versements inannulables : l'application le dit avant d'effacer.
+- Les euros sont des **centimes entiers** : pas de dérive de flottant.
+- La conversion arrondit **à l'inférieur** — jamais un centime offert.
+- Le montant d'une cagnotte est dérivé de ses versements, jamais recopié.
+- Une opération non confirmée n'est **jamais** présentée comme comptabilisée.

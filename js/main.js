@@ -1,57 +1,66 @@
-// Point d'entrée : assemble le registre d'Éclats, le journal des versements et
-// le Store, puis démarre l'application.
+// Point d'entrée : assemble le taux de change, la Bourse, le journal des
+// versements et le Store, puis démarre l'application.
 //
-// C'est le SEUL endroit qui décide d'où vient le solde :
-//   * une session Supabase active → registre COMMUN (solde partagé avec Pronos,
-//     Discipline, Centrale…) ;
-//   * sinon → registre LOCAL (l'app fonctionne seule, solde d'ouverture arbitraire).
-// Les deux exposent le même contrat : ni le Store ni l'interface ne changent.
+//     Éclats communs ──(conversion au taux)──▶ Bourse (€) ──▶ Cagnottes (€)
 //
-// La connexion / déconnexion se fait depuis l'écran « Mes Éclats » (voir
-// window.Registre, exposé ci-dessous, utilisé par app.js).
+// Deux registres cohabitent, volontairement :
+//   * `partage` — le registre commun d'Éclats (Supabase), touché UNIQUEMENT
+//     par les conversions ;
+//   * `journalBourse` — la Bourse en euros, locale : c'est elle qui finance les
+//     versements dans les cagnottes. Verser ne dépend donc pas du réseau.
 
 import { createRegistre } from './eclats-registre.js';
 import { createRegistreLocal } from './eclats-local.js';
-import { createCagnottesEclats } from './eclats-cagnottes.js';
+import { createCagnottesEclats, ETAT_STORAGE_KEY } from './eclats-cagnottes.js';
+import { createTaux, FENETRES } from './bourse-taux.js';
+import { createBourse, BOURSE_JOURNAL_KEY } from './bourse.js';
 import { creerStore } from './store.js';
 
 const uid = () => U.uid();
 
-// Client du registre commun (Supabase) : toujours instancié, car il porte la
-// connexion. Il n'est utilisé comme source du solde que si une session existe.
+/* Registre commun d'Éclats : porte la session et sert les conversions. */
 const partage = createRegistre();
 window.Registre = partage;
 
-const registre = partage.estConnecte() ? partage : createRegistreLocal({ uid });
-const eclats = createCagnottesEclats({ ledger: registre, uid });
+/* Moteur du taux de change : démarre et rattrape le temps passé hors ligne. */
+const taux = createTaux();
+taux.init();
+window.Taux = taux;
+window.FENETRES_TAUX = FENETRES;   // lu par l'écran Change pour ses boutons
 
-/* Compte rendu de la bascule euro → Éclats, affiché une fois l'app prête. */
-let rapportBascule = null;
+/* La Bourse : journal local en centimes d'euros. */
+const journalBourse = createRegistreLocal({ uid, cle: BOURSE_JOURNAL_KEY });
+const bourse = createBourse({ journal: journalBourse, eclats: partage, taux, uid });
 
-window.Store = creerStore({
-  eclats,
-  registre,
-  onMigration: (rapport) => { rapportBascule = rapport; },
+/* Versements dans les cagnottes : financés par la Bourse, en centimes. */
+const versements = createCagnottesEclats({
+  ledger: journalBourse, uid, cle: 'cagnottes_versements_euro_v1',
 });
 
+/*
+ * Contrôleur historique, branché sur le registre commun et sur l'ancienne clé :
+ * il ne sert qu'à REMBOURSER les versements de test faits en Éclats, au moment
+ * de la bascule vers les euros.
+ */
+const ancienVersements = createCagnottesEclats({
+  ledger: partage, uid, cle: ETAT_STORAGE_KEY,
+});
+
+let basculeRequise = false;
+
+window.Store = creerStore({
+  versements,
+  bourse,
+  ancienVersements,
+  onBasculeRequise: () => { basculeRequise = true; },
+});
+
+/* Le taux continue de vivre pendant que l'app est ouverte. */
+setInterval(() => {
+  taux.tick();
+  if (location.hash.startsWith('#/change')) App.majTaux();
+}, 10_000);
+
 App.init().then(() => {
-  if (!rapportBascule) return;
-  const r = rapportBascule;
-  Views.openModal(`
-    <h2 class="modal-title">Bienvenue dans les Éclats ✦</h2>
-    <p>Cagnottes ne compte plus en euros. Tes données ont été converties une fois
-      pour toutes, au taux <strong>1 € = ${r.taux} ✦</strong> — aucun montant n'a été
-      perdu ni arrondi.</p>
-    <ul class="mvt-list">
-      <li class="mvt"><span class="mvt-info">${r.nbCagnottes} ${U.plural(r.nbCagnottes, 'cagnotte')} converties,
-        ${r.nbVersements} ${U.plural(r.nbVersements, 'versement')} reconstitués</span></li>
-      <li class="mvt"><span class="mvt-info">${U.fmtEclats(r.totalEngage)} toujours engagés dans tes cagnottes</span></li>
-      <li class="mvt"><span class="mvt-info">${U.fmtEclats(r.soldeInitial)} disponibles au départ</span></li>
-    </ul>
-    <p class="hint">Le solde de départ est provisoire : il sera corrigé lors de la
-      synchronisation avec Centrale. Ton ancienne Bourse
-      (${r.soldeEuroAbandonne.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })})
-      n'est pas reportée, mais tes données en euros sont conservées et
-      exportables depuis les Réglages.</p>
-    <button class="btn primary wide" data-action="modal-close-home">C'est parti</button>`);
+  if (basculeRequise) App.proposerBascule();
 });

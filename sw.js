@@ -2,7 +2,7 @@
 
 /* Service worker : pré-cache de tous les assets pour un fonctionnement 100 % hors-ligne.
    Incrémenter CACHE_VERSION à chaque mise à jour de l'app pour invalider l'ancien cache. */
-const CACHE_VERSION = 'cagnottes-v2-eclats';
+const CACHE_VERSION = 'cagnottes-v3-euros';
 const ASSETS = [
   './',
   './index.html',
@@ -15,7 +15,11 @@ const ASSETS = [
   './js/store.js',
   './js/eclats-local.js',
   './js/eclats-cagnottes.js',
+  './js/eclats-registre.js',
   './js/eclats-migration.js',
+  './js/bourse.js',
+  './js/bourse-taux.js',
+  './js/bascule-euros.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'

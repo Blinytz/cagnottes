@@ -14,6 +14,34 @@ const U = {
     return `${new Intl.NumberFormat('fr-FR').format(U.ent(v))} ✦`;
   },
 
+  /*
+   * Les euros sont comptés en CENTIMES entiers : aucune dérive de flottant.
+   * Formatage d'un montant en centimes : « 1 250,00 € »
+   */
+  fmtEuros(centimes) {
+    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' })
+      .format(U.ent(centimes) / 100);
+  },
+
+  /* Variante compacte sans décimales inutiles : « 12,50 € » / « 600 € » */
+  fmtEurosCourt(centimes) {
+    const c = U.ent(centimes);
+    return c % 100 === 0
+      ? new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR',
+        maximumFractionDigits: 0 }).format(c / 100)
+      : U.fmtEuros(c);
+  },
+
+  /*
+   * Parse un montant saisi en euros → CENTIMES. Accepte « 12,50 », « 12.50 »,
+   * « 1 250 ». NaN si la saisie n'est pas un nombre.
+   */
+  parseEuros(str) {
+    if (typeof str !== 'string' || str.trim() === '') return NaN;
+    const v = parseFloat(str.replace(/\s/g, '').replace(',', '.'));
+    return Number.isFinite(v) ? Math.round(v * 100) : NaN;
+  },
+
   /* Clé de jour locale au format YYYY-MM-DD */
   todayKey(d = new Date()) {
     const p = n => String(n).padStart(2, '0');

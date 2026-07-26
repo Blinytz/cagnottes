@@ -11,6 +11,12 @@ const Views = (() => {
   const ranges = {};
   const RANGE_DAYS = { '7j': 7, '30j': 30, 'tout': null };
 
+  /* Fenêtre de la courbe du taux (heures), et liste servie par le moteur.
+     Lue à l'usage : `main.js` la publie après le chargement des scripts. */
+  let fenetreChange = 24;
+  const fenetresTaux = () => window.FENETRES_TAUX || [{ heures: 24, libelle: '24 h' }];
+  function setFenetreChange(h) { fenetreChange = Number(h) || 24; }
+
   /* ---------- Helpers de rendu ---------- */
 
   function imgHTML(image, cls = '') {
@@ -66,8 +72,8 @@ const Views = (() => {
           <div class="card-body">
             <h3>${U.esc(c.nom)} ${attente ? '<span class="badge-ready">✓ Prête !</span>' : ''}</h3>
             <div class="card-amounts">
-              <strong>${U.fmtEclats(c.montantActuel)}</strong>
-              <span class="muted">/ ${U.fmtEclats(c.objectif)}</span>
+              <strong>${U.fmtEuros(c.montantActuel)}</strong>
+              <span class="muted">/ ${U.fmtEuros(c.objectif)}</span>
               <span class="card-pct">${Math.round(p)}%</span>
             </div>
             ${progressHTML(c)}
@@ -75,18 +81,18 @@ const Views = (() => {
           <div class="card-actions">
             <button class="btn-step minus" data-action="step-minus" data-id="${c.id}"
               ${retrait == null ? 'disabled' : ''}
-              title="${retrait == null ? 'Aucun versement à annuler' : 'Annuler le dernier versement (' + U.fmtEclats(retrait) + ')'}">−</button>
+              title="${retrait == null ? 'Aucun versement à annuler' : 'Annuler le dernier versement (' + U.fmtEuros(retrait) + ')'}">−</button>
             <button class="btn-step plus" data-action="step-plus" data-id="${c.id}"
               ${plusBloque ? 'disabled' : ''}
-              title="${plusBloque ? 'Aucun Éclat disponible' : 'Verser ' + U.fmtEclats(c.palier)}">+</button>
+              title="${plusBloque ? 'Bourse vide' : 'Verser ' + U.fmtEuros(c.palier)}">+</button>
           </div>
         </article>`;
       }).join('') + `</div>`;
     }
 
     const avertissement = (plusBloque && list.length)
-      ? `<div class="warn-banner">✦ Aucun Éclat disponible : les versements sont bloqués.
-          Les Éclats se gagnent dans les autres applications de l'écosystème.</div>` : '';
+      ? `<div class="warn-banner">💶 Bourse vide : les versements sont bloqués.
+          Convertis des Éclats en euros depuis l'écran Change.</div>` : '';
 
     const triInfo = Store.state.ordreManuel && list.length > 1
       ? `<button class="link-btn" data-action="reset-ordre">↩︎ Revenir au tri automatique (% décroissant)</button>` : '';
@@ -121,7 +127,7 @@ const Views = (() => {
         pas_assez_de_donnees: '⏳ Estimation disponible après quelques jours d’activité.',
         rythme_negatif: '📉 Rythme récent nul ou négatif — estimation impossible pour l’instant.',
         atteint: '🎉 Objectif atteint !',
-      }[e.type] || `🔮 À ce rythme (${U.fmtEclats(e.moyenne)}/jour), objectif atteint dans environ <strong>${e.jours} ${U.plural(e.jours, 'jour')}</strong>.`;
+      }[e.type] || `🔮 À ce rythme (${U.fmtEuros(e.moyenne)}/jour), objectif atteint dans environ <strong>${e.jours} ${U.plural(e.jours, 'jour')}</strong>.`;
       estimHTML = `<div class="estimation">${msg}</div>`;
     }
 
@@ -132,14 +138,14 @@ const Views = (() => {
     const formsHTML = archivee ? '' : `
       <div class="panel">
         <div class="step-row">
-          <button class="btn-step big minus" data-action="step-minus" data-id="${c.id}" ${retrait == null ? 'disabled' : ''}>− ${retrait == null ? 'Rien à annuler' : U.fmtEclats(retrait)}</button>
-          <button class="btn-step big plus" data-action="step-plus" data-id="${c.id}" ${solde <= 0 ? 'disabled' : ''}>+ ${U.fmtEclats(c.palier)}</button>
+          <button class="btn-step big minus" data-action="step-minus" data-id="${c.id}" ${retrait == null ? 'disabled' : ''}>− ${retrait == null ? 'Rien à annuler' : U.fmtEuros(retrait)}</button>
+          <button class="btn-step big plus" data-action="step-plus" data-id="${c.id}" ${solde <= 0 ? 'disabled' : ''}>+ ${U.fmtEuros(c.palier)}</button>
         </div>
         <p class="hint">Le « − » annule le dernier versement, pour son montant exact.</p>
-        ${solde <= 0 ? `<p class="hint warn">✦ Aucun Éclat disponible : les versements sont bloqués.</p>` : ''}
+        ${solde <= 0 ? `<p class="hint warn">💶 Bourse vide : convertis des Éclats depuis l'écran Change.</p>` : ''}
         <form id="form-montant-libre" data-id="${c.id}" class="montant-libre">
           <div class="field-row">
-            <input type="text" name="montant" inputmode="numeric" placeholder="Montant (✦)" required>
+            <input type="text" name="montant" inputmode="numeric" placeholder="Montant (€)" required>
             <input type="text" name="note" placeholder="Note (optionnel)" maxlength="120">
           </div>
           <div class="field-row">
@@ -155,8 +161,8 @@ const Views = (() => {
     const mouvements = [...c.mouvements].sort((a, b) => new Date(b.date) - new Date(a.date));
     const mvtsHTML = mouvements.length ? `<ul class="mvt-list">` + mouvements.map(m => `
       <li class="mvt">
-        <span class="mvt-montant ${m.montant >= 0 ? 'pos' : 'neg'}">${m.montant >= 0 ? '+' : ''}${U.fmtEclats(m.montant)}</span>
-        <span class="mvt-info">${m.type === 'annulation' ? '↩︎ Versement annulé' : '✦ Versement'}<br>
+        <span class="mvt-montant ${m.montant >= 0 ? 'pos' : 'neg'}">${m.montant >= 0 ? '+' : ''}${U.fmtEuros(m.montant)}</span>
+        <span class="mvt-info">${m.type === 'annulation' ? '↩︎ Versement annulé' : '💶 Versement'}<br>
           <span class="muted small">${U.fmtDateTime(m.date)}${m.note ? ` — <em>${U.esc(m.note)}</em>` : ''}</span></span>
         ${(!archivee && m.annulable)
           ? `<button class="btn secondary small" data-action="annuler-versement" data-id="${m.versementId}">Annuler</button>` : ''}
@@ -169,8 +175,8 @@ const Views = (() => {
         <div class="detail-title">
           <h1>${U.esc(c.nom)} ${archivee ? '<span class="badge-archive">🏆 Validée</span>' : ''}</h1>
           <div class="detail-amounts">
-            <span class="big-amount">${U.fmtEclats(c.montantActuel)}</span>
-            <span class="muted">/ ${U.fmtEclats(c.objectif)} · ${Math.round(p)}%</span>
+            <span class="big-amount">${U.fmtEuros(c.montantActuel)}</span>
+            <span class="muted">/ ${U.fmtEuros(c.objectif)} · ${Math.round(p)}%</span>
           </div>
         </div>
         ${archivee ? '' : `<button class="icon-btn" data-action="edit-cagnotte" data-id="${c.id}" title="Modifier">✏️</button>`}
@@ -198,7 +204,7 @@ const Views = (() => {
       </div>
 
       <div class="panel meta">
-        <p class="muted">Créée le ${U.fmtDate(c.dateCreation)}${archivee ? ` · validée le ${U.fmtDate(c.dateArchivage)} (${U.fmtDuree(c.dateCreation, c.dateArchivage)})` : ''} · palier : ${U.fmtEclats(c.palier)}</p>
+        <p class="muted">Créée le ${U.fmtDate(c.dateCreation)}${archivee ? ` · validée le ${U.fmtDate(c.dateArchivage)} (${U.fmtDuree(c.dateCreation, c.dateArchivage)})` : ''} · palier : ${U.fmtEuros(c.palier)}</p>
         ${archivee ? `<button class="btn secondary" data-action="reactiver-cagnotte" data-id="${c.id}">♻️ Réactiver</button>` : ''}
         <button class="btn danger" data-action="delete-cagnotte" data-id="${c.id}">🗑 Supprimer la cagnotte</button>
       </div>
@@ -212,16 +218,16 @@ const Views = (() => {
     const nd = `<span class="muted">Pas encore assez de données</span>`;
 
     const tiles = [
-      ['✦', 'Moyenne versée / jour', s.moyenneJour != null ? U.fmtEclats(s.moyenneJour) : nd],
+      ['✦', 'Moyenne versée / jour', s.moyenneJour != null ? U.fmtEuros(s.moyenneJour) : nd],
       ['⏱', 'Temps moyen de clôture', s.tempsMoyenJours != null ? `${s.tempsMoyenJours} ${U.plural(s.tempsMoyenJours, 'jour')}` : nd],
       ['🧮', 'Cagnottes créées', s.nbCreees],
       ['🏆', 'Archivées / en cours', `${s.nbArchivees} / ${s.nbEnCours}`],
-      ['💰', 'Engagé dans les cagnottes', U.fmtEclats(s.totalEnCours)],
-      ['🎉', 'Total récompensé', s.nbArchivees ? U.fmtEclats(s.totalRecompense) : nd],
+      ['💰', 'Engagé dans les cagnottes', U.fmtEuros(s.totalEnCours)],
+      ['🎉', 'Total récompensé', s.nbArchivees ? U.fmtEuros(s.totalRecompense) : nd],
       ['⚡', 'Plus rapide à compléter', s.plusRapide
         ? `${U.esc(s.plusRapide.c.nom)} <span class="muted">(${s.plusRapide.jours} ${U.plural(s.plusRapide.jours, 'jour')})</span>` : nd],
       ['📅', 'Jour le plus généreux', s.meilleurJour
-        ? `${s.meilleurJour.jour} <span class="muted">(${U.fmtEclats(s.meilleurJour.montant)} au total)</span>` : nd],
+        ? `${s.meilleurJour.jour} <span class="muted">(${U.fmtEuros(s.meilleurJour.montant)} au total)</span>` : nd],
     ];
 
     return `<section class="view">
@@ -260,7 +266,7 @@ const Views = (() => {
             <div class="card-img">${imgHTML(c.image)}</div>
             <div class="card-body">
               <h3>${U.esc(c.nom)}</h3>
-              <div class="card-amounts"><strong>${U.fmtEclats(c.objectif)}</strong> <span class="muted">atteints</span></div>
+              <div class="card-amounts"><strong>${U.fmtEuros(c.objectif)}</strong> <span class="muted">atteints</span></div>
               <p class="muted small">Du ${U.fmtDate(c.dateCreation)} au ${U.fmtDate(c.dateArchivage)} · ${U.fmtDuree(c.dateCreation, c.dateArchivage)}</p>
             </div>
             <button class="btn secondary small" data-action="reactiver-cagnotte" data-id="${c.id}">♻️ Réactiver</button>
@@ -292,104 +298,180 @@ const Views = (() => {
     return APPS[appId] || { nom: appId, icone: '◇' };
   }
 
-  function viewEclats() {
+  function viewChange() {
     const disponible = Store.soldeDisponible();
     const engage = Store.totalEngage();
     const recompense = Store.totalRecompense();
-    const local = !!Store.registre.estLocal;
-    const emailConnecte = (!local && typeof Store.registre.utilisateur === 'function')
-      ? (Store.registre.utilisateur()?.email || '') : '';
-    const souffrance = Store.eclats.enSouffrance();
+    const connecte = !!(window.Registre && window.Registre.estConnecte());
+    const email = connecte ? (window.Registre.utilisateur()?.email || '') : '';
+    const taux = window.Taux;
+    const t = taux.actuel();
+    const zone = taux.zone();
+    const souffranceV = Store.eclats.enSouffrance();
+    const souffranceC = Store.bourse.enSouffrance();
+    const conversions = Store.bourse.toutesConversions()
+      .filter(c => c.statut === 'confirmee').slice(0, 8);
+    const tot = Store.bourse.totaux();
 
-    const rejeuHTML = souffrance.length ? `
+    const libelleZone = { basse: 'Zone basse — mieux vaut attendre',
+      haute: 'Zone haute — bon moment pour convertir',
+      neutre: 'Zone neutre' }[zone];
+
+    const rejeuHTML = (souffranceV.length || souffranceC.length) ? `
       <div class="panel">
         <h2>À confirmer</h2>
-        <p class="hint">Ces opérations n'ont pas été confirmées par le registre : elles ne sont
-          pas comptabilisées tant qu'elles n'ont pas abouti.</p>
+        <p class="hint">Ces opérations n'ont pas abouti : elles ne sont pas comptabilisées.</p>
         <ul class="mvt-list">
-          ${souffrance.map(v => {
+          ${souffranceC.map(c => `<li class="mvt">
+            <span class="mvt-montant neg">${U.fmtEclats(c.eclatsDemandes)}</span>
+            <span class="mvt-info">Conversion au taux ×${c.taux.toFixed(2)}<br>
+              <span class="muted small">${U.esc(c.erreur || 'En attente')}</span></span>
+            <button class="btn secondary small" data-action="reprendre-conversion" data-id="${c.id}">Réessayer</button>
+          </li>`).join('')}
+          ${souffranceV.map(v => {
             const c = Store.getCagnotte(v.cagnotteId);
             return `<li class="mvt">
-              <span class="mvt-montant neg">${U.fmtEclats(v.requested)}</span>
+              <span class="mvt-montant neg">${U.fmtEuros(v.requested)}</span>
               <span class="mvt-info">${c ? U.esc(c.nom) : 'Cagnotte supprimée'}<br>
-                <span class="muted small">${U.esc(v.erreur || 'En attente de confirmation')}</span></span>
+                <span class="muted small">${U.esc(v.erreur || 'En attente')}</span></span>
               <button class="btn secondary small" data-action="reprendre-versement" data-id="${v.id}">Réessayer</button>
             </li>`;
           }).join('')}
         </ul>
       </div>` : '';
 
+    const histoHTML = conversions.length ? `
+      <div class="panel">
+        <h2>Dernières conversions</h2>
+        <ul class="mvt-list">
+          ${conversions.map(c => `<li class="mvt">
+            <span class="mvt-montant pos">+${U.fmtEuros(c.centimes)}</span>
+            <span class="mvt-info">${U.fmtEclats(c.eclats)} convertis · taux ×${c.taux.toFixed(2)}<br>
+              <span class="muted small">${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
+          </li>`).join('')}
+        </ul>
+        <p class="hint">${tot.nb} ${U.plural(tot.nb, 'conversion')} · ${U.fmtEclats(tot.eclats)}
+          transformés en ${U.fmtEuros(tot.centimes)}.</p>
+      </div>` : '';
+
+    const conversionHTML = connecte ? `
+      <div class="panel">
+        <h2>Convertir des Éclats en euros</h2>
+        <p class="hint">Tu choisis la part que tu veux transformer — pas besoin de tout convertir.
+          Le taux appliqué est celui affiché au moment où tu valides.
+          <strong>La conversion est définitive.</strong></p>
+        <form id="form-conversion" class="montant-libre">
+          <div class="field-row">
+            <input type="text" id="conv-montant" name="montant" inputmode="numeric"
+              placeholder="Combien d'Éclats ?" autocomplete="off" required>
+            <button type="button" class="btn secondary" data-action="conv-tout">Tout</button>
+          </div>
+          <div id="conv-apercu" class="conv-apercu muted">Saisis un montant pour voir l'équivalent.</div>
+          <button type="submit" class="btn primary wide">Convertir</button>
+        </form>
+      </div>` : `
+      <div class="panel">
+        <h2>Convertir des Éclats en euros</h2>
+        <p class="hint warn">Connecte-toi au registre commun pour convertir tes Éclats
+          (le même compte que Pronos).</p>
+        <button class="btn primary wide" data-action="connexion">Se connecter au registre commun</button>
+      </div>`;
+
     return `<section class="view">
-      <h1>Mes Éclats</h1>
+      <h1>Change</h1>
 
       <div class="eclats-solde">
-        <span class="eclats-icon">✦</span>
-        <span class="eclats-montant">${U.fmtEclats(disponible)}</span>
-        <span class="muted">disponibles</span>
+        <span class="eclats-icon">💶</span>
+        <span class="eclats-montant">${U.fmtEuros(disponible)}</span>
+        <span class="muted">dans la Bourse</span>
       </div>
 
       <div class="eclats-repartition">
         <div class="eclats-part">
-          <div class="eclats-part-val">${U.fmtEclats(engage)}</div>
+          <div class="eclats-part-val">${U.fmtEuros(engage)}</div>
           <div class="eclats-part-lbl">engagés dans les cagnottes</div>
         </div>
         <div class="eclats-part">
-          <div class="eclats-part-val">${U.fmtEclats(recompense)}</div>
+          <div class="eclats-part-val">${U.fmtEuros(recompense)}</div>
           <div class="eclats-part-lbl">déjà transformés en récompenses</div>
         </div>
       </div>
 
-      ${rejeuHTML}
-
       <div class="panel">
-        <h2>Éclats de l'écosystème</h2>
-        <p class="hint">Répartition par application, telle que la lit Centrale.</p>
-        <div id="eclats-apps"><p class="muted">Lecture du registre…</p></div>
+        <div class="taux-entete">
+          <div>
+            <div class="taux-valeur">×${t.toFixed(2)}</div>
+            <div class="muted small">100 ✦ = ${U.fmtEuros(Math.floor(t * 100))}</div>
+          </div>
+          <div class="taux-zone zone-${zone}">${libelleZone}</div>
+        </div>
+        <div id="taux-graphe">${taux.svg(fenetreChange, 320, 120)}</div>
+        <div class="range-selector">
+          ${fenetresTaux().map(f => `<button class="range-btn${f.heures === fenetreChange ? ' active' : ''}"
+            data-action="set-fenetre-taux" data-heures="${f.heures}">${f.libelle}</button>`).join('')}
+        </div>
+        <p class="hint">Le taux varie entre ×0,60 et ×1,40 et continue d'évoluer même
+          application fermée.</p>
       </div>
 
       <div class="panel">
-        <h2>D'où viennent les Éclats ?</h2>
-        <p class="muted">Cagnottes ne crée jamais d'Éclats : elle en dépense et en rend.
-          Les Éclats se gagnent dans les autres applications de l'écosystème.</p>
-        ${local ? `<p class="hint warn">⏳ Registre <strong>local</strong> : le solde est tenu
-          par cette application seule, en attendant le raccordement au registre commun.
-          Le solde d'ouverture a été fixé arbitrairement et sera corrigé lors de la
-          synchronisation avec Centrale.</p>
-        <button class="btn primary wide" data-action="connexion">Se connecter au registre commun</button>`
-        : `<p class="hint">✓ Connecté au registre commun de l'écosystème${emailConnecte ? ` · <strong>${U.esc(emailConnecte)}</strong>` : ''}.</p>
-        <button class="btn secondary wide" data-action="deconnexion">Se déconnecter</button>`}
+        <h2>Mes Éclats</h2>
+        <div id="eclats-dispo"><p class="muted">Lecture du registre…</p></div>
+        ${connecte ? `<p class="hint">✓ Connecté${email ? ` · <strong>${U.esc(email)}</strong>` : ''}.
+          <button class="link-btn" data-action="deconnexion">Se déconnecter</button></p>` : ''}
+      </div>
+
+      ${conversionHTML}
+      ${rejeuHTML}
+      ${histoHTML}
+
+      <div class="panel">
+        <h2>D'où viennent les euros ?</h2>
+        <p class="muted">Cagnottes ne crée jamais d'argent : elle transforme des Éclats
+          gagnés dans les autres applications (Pronos, Discipline…) en euros, au taux
+          du moment, puis tu les répartis dans tes cagnottes.</p>
       </div>
     </section>`;
   }
 
-  /* Remplit la répartition par application (lecture asynchrone du registre) */
-  async function chargerRepartition() {
-    const hote = document.getElementById('eclats-apps');
+  /* Solde d'Éclats du registre commun (lecture asynchrone). */
+  async function chargerEclatsDispo() {
+    const hote = document.getElementById('eclats-dispo');
     if (!hote) return;
+    if (!window.Registre || !window.Registre.estConnecte()) {
+      hote.innerHTML = `<p class="muted">Non connecté au registre commun.</p>`;
+      return;
+    }
     try {
-      const agregats = await Store.registre.agregatsParApp();
-      if (!agregats || !agregats.length) {
-        hote.innerHTML = `<p class="muted">Aucun mouvement enregistré pour l'instant.</p>`;
-        return;
-      }
-      hote.innerHTML = `<ul class="app-list">` + agregats
-        .sort((a, b) => Number(b.balance) - Number(a.balance))
-        .map(a => {
-          const m = metaApp(a.app_id);
-          return `<li class="app-row">
-            <span class="app-icone">${m.icone}</span>
-            <span class="app-nom">${U.esc(m.nom)}</span>
-            <span class="app-chiffres">
-              <strong>${U.fmtEclats(a.balance)}</strong>
-              <span class="muted small">+${U.fmtEclats(a.gained)} / −${U.fmtEclats(a.spent)}</span>
-            </span>
-          </li>`;
-        }).join('') + `</ul>`;
+      const solde = await window.Registre.solde();
+      const t = window.Taux.actuel();
+      hote.innerHTML = `<div class="eclats-dispo-ligne">
+        <span class="eclats-dispo-val">${U.fmtEclats(solde)}</span>
+        <span class="muted small">disponibles · soit ${U.fmtEuros(window.Taux.centimesPour(solde, t))}
+          au taux actuel</span>
+      </div>`;
+      hote.dataset.solde = String(Math.floor(solde));
     } catch (e) {
       hote.innerHTML = `<p class="muted">Registre indisponible : ${U.esc(e.message || e)}</p>`;
     }
   }
 
+  /* Aperçu en direct de la conversion pendant la saisie. */
+  function majApercuConversion() {
+    const champ = document.getElementById('conv-montant');
+    const apercu = document.getElementById('conv-apercu');
+    if (!champ || !apercu) return;
+    const n = U.parseEclats(champ.value);
+    if (!Number.isFinite(n) || n <= 0) {
+      apercu.className = 'conv-apercu muted';
+      apercu.textContent = "Saisis un montant pour voir l'équivalent.";
+      return;
+    }
+    const sim = Store.bourse.simuler(n);
+    apercu.className = 'conv-apercu actif';
+    apercu.innerHTML = `${U.fmtEclats(sim.eclats)} → <strong>${U.fmtEuros(sim.centimes)}</strong>
+      <span class="muted small">(taux ×${sim.taux.toFixed(2)})</span>`;
+  }
   /* ---------- Écran 6 : Réglages ---------- */
 
   function viewReglages() {
@@ -502,11 +584,11 @@ const Views = (() => {
 
         <div class="field-row">
           <div class="field">
-            <label class="label">Objectif (✦)</label>
+            <label class="label">Objectif (€)</label>
             <input type="text" name="objectif" inputmode="numeric" required placeholder="6000" value="${existing ? String(existing.objectif) : ''}">
           </div>
           <div class="field">
-            <label class="label">Palier du « + » (✦)</label>
+            <label class="label">Palier du « + » (€)</label>
             <input type="text" name="palier" inputmode="numeric" required placeholder="50" value="${existing ? String(existing.palier) : ''}">
           </div>
         </div>
@@ -589,7 +671,7 @@ const Views = (() => {
         <div class="celebrate-img pop">${imgHTML(c.image, 'lg')}</div>
         <h2>Bravo ! 🎉</h2>
         <p><strong>${U.esc(c.nom)}</strong> est complétée :<br>
-          <span class="celebrate-montant">${U.fmtEclats(c.objectif)}</span> réunis pour te récompenser.</p>
+          <span class="celebrate-montant">${U.fmtEuros(c.objectif)}</span> réunis pour te récompenser.</p>
         <p class="muted">La cagnotte rejoint tes archives — offre-toi ta récompense, tu l'as méritée !</p>
         <button class="btn primary wide" data-action="modal-close-home">Youpi !</button>
       </div>`);
@@ -659,7 +741,7 @@ const Views = (() => {
       const cv = document.getElementById('chart-cagnotte');
       if (c && cv) Charts.draw(cv, serieFor('cagnotte:' + route.id, c.historiqueJournalier), { goal: c.objectif });
     }
-    if (route.name === 'eclats') chargerRepartition();
+    if (route.name === 'change') chargerEclatsDispo();
     if (route.name === 'stats') {
       const cv = document.getElementById('chart-stats');
       if (cv) Charts.draw(cv, serieFor('stats', Store.stats().histoGlobal));
@@ -668,7 +750,8 @@ const Views = (() => {
   }
 
   return {
-    viewHome, viewCagnotte, viewStats, viewArchives, viewEclats, viewReglages,
+    viewHome, viewCagnotte, viewStats, viewArchives, viewChange, viewReglages,
+    majApercuConversion, setFenetreChange, chargerEclatsDispo,
     openModal, closeModal, confirmDialog, cagnotteFormModal, celebrate,
     afterRender, ranges
   };

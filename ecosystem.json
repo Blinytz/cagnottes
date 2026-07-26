@@ -2,11 +2,42 @@
   "schemaVersion": 1,
   "appId": "cagnottes",
   "displayName": "Cagnottes",
-  "description": "Tirelires personnelles et projets d'épargne.",
+  "description": "Cagnottes d'épargne en euros, alimentées en convertissant des Éclats.",
   "lifecycle": "stable",
-  "ownership": { "audience": "single-user", "repositoryVisibility": "public", "repository": "Blinytz/cagnottes" },
-  "data": { "storage": ["localStorage"], "exportAvailable": true, "productionMutationAllowed": false },
-  "eclats": { "mode": "shared-optin", "ledger": "shared", "balanceMigration": "done-1eur-100eclats" },
-  "commands": { "install": null, "dev": "python -m http.server 4321", "test": "node --test", "build": null, "lint": null },
-  "integration": { "contractVersion": 1, "status": "connectable", "adapter": "js/eclats-cagnottes.js", "client": "js/eclats-registre.js", "requires": "apps/pronos/sql/registre_commun.sql" }
+  "ownership": {
+    "audience": "single-user",
+    "repositoryVisibility": "public",
+    "repository": "Blinytz/cagnottes"
+  },
+  "data": {
+    "storage": [
+      "localStorage"
+    ],
+    "exportAvailable": true,
+    "productionMutationAllowed": false
+  },
+  "eclats": {
+    "mode": "conversion",
+    "ledger": "shared",
+    "unite": "euros",
+    "tauxMin": 0.6,
+    "tauxMax": 1.4,
+    "parite": "100 eclats = 1 EUR au taux 1.00"
+  },
+  "commands": {
+    "install": null,
+    "dev": "python -m http.server 4321",
+    "test": "node --test",
+    "build": null,
+    "lint": null
+  },
+  "integration": {
+    "contractVersion": 1,
+    "status": "connectable",
+    "adapter": "js/bourse.js",
+    "client": "js/eclats-registre.js",
+    "taux": "js/bourse-taux.js",
+    "requires": "apps/pronos/sql/registre_commun.sql",
+    "notes": "Seule la conversion touche le registre commun ; les versements sont locaux, en euros."
+  }
 }
