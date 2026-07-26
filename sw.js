@@ -2,7 +2,7 @@
 
 /* Service worker : pré-cache de tous les assets pour un fonctionnement 100 % hors-ligne.
    Incrémenter CACHE_VERSION à chaque mise à jour de l'app pour invalider l'ancien cache. */
-const CACHE_VERSION = 'cagnottes-v3-euros-2';
+const CACHE_VERSION = 'cagnottes-v3-euros-3';
 const ASSETS = [
   './',
   './index.html',
@@ -39,10 +39,30 @@ self.addEventListener('activate', e => {
   );
 });
 
-/* Stratégie cache-first, avec mise en cache au vol des ressources same-origin
-   (utile pour les images de cagnottes chargées par URL sur le même domaine). */
+/*
+ * Navigation (la page elle-même) : RÉSEAU D'ABORD. La servir depuis le cache
+ * figeait l'app sur une version périmée — c'est elle qui référence les scripts,
+ * donc une coquille périmée entraîne toute l'app avec elle. Hors ligne, on
+ * retombe sur la copie mise en cache.
+ */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then(resp => {
+          const clone = resp.clone();
+          caches.open(CACHE_VERSION).then(c => c.put('./index.html', clone));
+          return resp;
+        })
+        .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+    );
+    return;
+  }
+
+  /* Reste des ressources : cache d'abord, avec mise en cache au vol des
+     ressources same-origin (images de cagnottes chargées par URL). */
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
