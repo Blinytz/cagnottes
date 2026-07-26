@@ -478,36 +478,63 @@ const Views = (() => {
     const nb = Store.state.cagnottes.length;
     let taille = '';
     try {
-      const cles = ['cagnottes_app_state_v1', 'cagnottes_eclats_v1', 'cagnottes_eclats_local_v1'];
+      const cles = ['cagnottes_app_state_v1', 'cagnottes_versements_euro_v1',
+        'cagnottes_bourse_v1', 'cagnottes_conversions_v1', 'cagnottes_taux_v1'];
       const octets = cles.reduce((s, k) => s + (localStorage.getItem(k) || '').length, 0) * 2;
       taille = (octets / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' Ko';
     } catch { taille = '?'; }
 
-    let sauvegardeEuro = false;
-    try { sauvegardeEuro = !!localStorage.getItem('cagnottes_sauvegarde_euro_v1'); } catch { /* ignore */ }
+    let sauvegardeEuro = false, sauvegardeEclats = false;
+    try {
+      sauvegardeEuro = !!localStorage.getItem('cagnottes_sauvegarde_euro_v1');
+      sauvegardeEclats = !!localStorage.getItem('cagnottes_sauvegarde_eclats_v2');
+    } catch { /* stockage indisponible */ }
+
+    const connecte = !!(window.Registre && window.Registre.estConnecte());
+    const email = connecte ? (window.Registre.utilisateur()?.email || '') : '';
+
+    /* Synchronisation : c'est ici qu'on relie l'app au registre commun d'Éclats. */
+    const syncHTML = connecte ? `
+      <p class="hint">✓ Connecté au registre commun${email ? ` · <strong>${U.esc(email)}</strong>` : ''}.
+        Tes Éclats sont partagés avec Pronos, Discipline et Centrale.</p>
+      <button class="btn secondary" data-action="deconnexion">Se déconnecter</button>`
+      : `
+      <p class="hint">Connecte-toi avec le <strong>même compte que Pronos</strong> pour
+        récupérer tes Éclats et pouvoir les convertir en euros.</p>
+      <button class="btn primary" data-action="connexion">Se connecter au registre commun</button>`;
 
     return `<section class="view">
       <h1>Réglages</h1>
+
+      <div class="panel">
+        <h2>🔗 Synchronisation</h2>
+        ${syncHTML}
+      </div>
+
       <div class="panel">
         <h2>💾 Sauvegarde</h2>
         <p class="hint">Le fichier JSON contient tout : cagnottes, journal des versements et
-          journal d'Éclats. Ce journal est indispensable — sans lui, les versements ne sont
-          plus annulables.</p>
+          Bourse. Ce journal est indispensable — sans lui, les versements ne sont plus
+          annulables.</p>
         <button class="btn primary" data-action="export-data">⬇️ Exporter mes données</button>
         <button class="btn secondary" data-action="import-data">⬆️ Importer mes données</button>
         <input type="file" id="import-file" accept=".json,application/json" hidden>
       </div>
-      ${sauvegardeEuro ? `<div class="panel">
-        <h2>🕰 Avant la bascule</h2>
-        <p class="hint">Tes données en euros, telles qu'elles étaient avant le passage aux
-          Éclats (1 € = 100 ✦), sont conservées. Elles ne sont plus utilisées par
-          l'application.</p>
-        <button class="btn secondary" data-action="export-euro">⬇️ Exporter la copie en euros</button>
+
+      ${(sauvegardeEuro || sauvegardeEclats) ? `<div class="panel">
+        <h2>🕰 Copies d'avant</h2>
+        <p class="hint">Les états précédents de l'application sont conservés et exportables.
+          Ils ne sont plus utilisés.</p>
+        ${sauvegardeEuro ? `<button class="btn secondary" data-action="export-euro">⬇️ Copie en euros (avant les Éclats)</button>` : ''}
+        ${sauvegardeEclats ? `<button class="btn secondary" data-action="export-eclats">⬇️ Copie en Éclats (avant le retour aux euros)</button>` : ''}
       </div>` : ''}
+
       <div class="panel">
         <h2>ℹ️ À propos</h2>
-        <p class="muted">Cagnottes v2 (Éclats) · ${nb} ${U.plural(nb, 'cagnotte')} · ${taille} utilisés ·
-          registre ${Store.registre.estLocal ? 'local' : 'commun'}</p>
+        <p class="muted">Cagnottes v3 (euros) · ${nb} ${U.plural(nb, 'cagnotte')} · ${taille} utilisés ·
+          registre commun ${connecte ? 'connecté' : 'non connecté'}</p>
+        <p class="muted small">Les cagnottes sont en euros. Les Éclats se convertissent en
+          euros depuis l'écran Change, à un taux qui varie entre ×0,60 et ×1,40.</p>
         <button class="btn danger" data-action="reset-data">🗑 Effacer toutes les données</button>
       </div>
     </section>`;

@@ -13,13 +13,27 @@
 </head>
 <body>
 
-  <!-- Bandeau Bourse persistant (visible sur les 6 écrans) -->
-  <header id="eclats-header" data-action="goto-eclats" title="Voir la Bourse et le taux">
-    <span class="eh-icon">💶</span>
-    <span class="eh-label">Bourse</span>
-    <span class="eh-engage"></span>
-    <span class="eh-solde">0,00 €</span>
-    <span class="eh-chevron">›</span>
+  <!--
+    Bandeau persistant : les deux monnaies, clairement dissociées.
+    À gauche les Éclats (registre commun, gagnés dans les autres apps) ;
+    à droite la Bourse en euros (ce qui est réellement versable ici).
+  -->
+  <header id="eclats-header">
+    <button class="eh-part" data-action="goto-eclats" title="Voir mes Éclats et le taux">
+      <span class="eh-icon">✦</span>
+      <span class="eh-bloc">
+        <span class="eh-solde" id="eh-eclats">—</span>
+        <span class="eh-label">Éclats</span>
+      </span>
+    </button>
+    <span class="eh-fleche">→</span>
+    <button class="eh-part eh-droite" data-action="goto-eclats" title="Voir la Bourse">
+      <span class="eh-bloc eh-fin">
+        <span class="eh-solde" id="eh-bourse">0,00 €</span>
+        <span class="eh-label eh-engage"></span>
+      </span>
+      <span class="eh-icon">€</span>
+    </button>
   </header>
 
   <main id="view"></main>
@@ -27,7 +41,7 @@
   <nav id="bottom-nav">
     <a href="#/" data-route="home"><span>🏠</span>Cagnottes</a>
     <a href="#/stats" data-route="stats"><span>📊</span>Stats</a>
-    <a href="#/change" data-route="change"><span>💱</span>Change</a>
+    <a href="#/change" data-route="change"><span class="ico-change">✦<i>→</i>€</span>Change</a>
     <a href="#/archives" data-route="archives"><span>🏆</span>Archives</a>
     <a href="#/reglages" data-route="reglages"><span>⚙️</span>Réglages</a>
   </nav>

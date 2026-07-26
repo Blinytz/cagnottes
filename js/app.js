@@ -22,6 +22,7 @@ const App = (() => {
     const h = location.hash.replace(/^#\/?/, '');
     const [seg, id] = h.split('/');
     if (seg === 'cagnotte' && id) return { name: 'cagnotte', id };
+    if (seg === 'eclats') return { name: 'change' };   // ancien lien, encore en cache
     if (['stats', 'archives', 'change', 'reglages'].includes(seg)) return { name: seg };
     return { name: 'home' };
   }
@@ -43,13 +44,43 @@ const App = (() => {
     Views.afterRender(route);
   }
 
-  /* Bandeau Bourse persistant : euros disponibles + total engagé */
+  /*
+   * Bandeau : les deux monnaies, jamais confondues.
+   *   ✦ Éclats — le solde du registre commun (gagné dans les autres apps) ;
+   *   € Bourse — ce qui est réellement versable dans les cagnottes.
+   */
   function updateHeader() {
     const disponible = Store.soldeDisponible();
     const el = document.getElementById('eclats-header');
     el.classList.toggle('vide', disponible <= 0);
-    el.querySelector('.eh-solde').textContent = U.fmtEuros(disponible);
-    el.querySelector('.eh-engage').textContent = `${U.fmtEuros(Store.totalEngage())} engagés`;
+    document.getElementById('eh-bourse').textContent = U.fmtEuros(disponible);
+    el.querySelector('.eh-engage').textContent = `Bourse · ${U.fmtEuros(Store.totalEngage())} engagés`;
+    majSoldeEclats();
+  }
+
+  /* Solde d'Éclats : lu du registre commun (asynchrone), mis en cache d'affichage. */
+  let soldeEclatsCache = null;
+  async function majSoldeEclats(forcer = false) {
+    const cible = document.getElementById('eh-eclats');
+    if (!cible) return;
+    if (!window.Registre || !window.Registre.estConnecte()) {
+      soldeEclatsCache = null;
+      cible.textContent = '—';
+      cible.title = 'Non connecté au registre commun';
+      return;
+    }
+    if (soldeEclatsCache !== null && !forcer) {
+      cible.textContent = U.fmtEclats(soldeEclatsCache);
+      return;
+    }
+    try {
+      soldeEclatsCache = Math.floor(await window.Registre.solde());
+      cible.textContent = U.fmtEclats(soldeEclatsCache);
+      cible.title = '';
+    } catch {
+      cible.textContent = '—';
+      cible.title = 'Registre injoignable';
+    }
   }
 
   /* Rafraîchit la courbe et la valeur du taux sans redessiner tout l'écran. */
@@ -258,6 +289,14 @@ const App = (() => {
         break;
       }
 
+      case 'export-eclats': {
+        const brut = localStorage.getItem('cagnottes_sauvegarde_eclats_v2');
+        if (!brut) return toast('Aucune copie en Éclats conservée.', 'error');
+        telecharger(brut, `cagnottes-avant-euros-${U.todayKey()}.json`);
+        toast('💾 Copie en Éclats téléchargée.', 'success');
+        break;
+      }
+
       case 'import-data':
         document.getElementById('import-file').click();
         break;
@@ -377,6 +416,7 @@ const App = (() => {
         { okLabel: 'Convertir' });
       if (!ok) return;
       const res = await Store.convertirEclats(montant);
+      await majSoldeEclats(true);
       render();
       if (res.ok) {
         toast(res.ajuste
@@ -477,6 +517,14 @@ const App = (() => {
     /* Service worker (PWA hors-ligne) */
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW non enregistré :', err));
+      /* Une nouvelle version vient de prendre la main : on recharge une fois,
+         sinon la page en cache resterait affichée avec ses anciens liens. */
+      let recharge = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (recharge) return;
+        recharge = true;
+        location.reload();
+      });
     }
   }
 

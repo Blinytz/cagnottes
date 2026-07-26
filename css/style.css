@@ -663,3 +663,24 @@ textarea:focus, input:focus { outline: none; border-color: var(--accent); }
 
 .eclats-dispo-ligne { display: flex; flex-direction: column; gap: 3px; }
 .eclats-dispo-val { font-size: 22px; font-weight: 800; }
+
+/* ---------- Bandeau : Éclats et Bourse dissociés ---------- */
+#eclats-header { justify-content: space-between; gap: 8px; }
+#eclats-header .eh-part {
+  display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0;
+  padding: 4px 6px; border: 0; border-radius: 12px;
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+#eclats-header .eh-part:active { background: rgba(255,255,255,.14); }
+#eclats-header .eh-droite { justify-content: flex-end; }
+#eclats-header .eh-bloc { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+#eclats-header .eh-bloc.eh-fin { align-items: flex-end; }
+#eclats-header .eh-label { font-size: .7rem; font-weight: 600; opacity: .75; letter-spacing: .04em; }
+#eclats-header .eh-solde { font-weight: 800; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+#eclats-header .eh-engage { opacity: .7; }
+#eclats-header .eh-fleche { opacity: .45; font-size: .95rem; flex: none; }
+#eclats-header .eh-icon { font-size: 1.2rem; opacity: .9; flex: none; }
+
+/* Icône « conversion » : un Éclat qui devient un euro (ni dollar ni yen) */
+.ico-change { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.ico-change i { font-style: normal; opacity: .55; margin: 0 1px; font-size: .85em; }
