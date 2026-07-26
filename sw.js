@@ -2,7 +2,7 @@
 
 /* Service worker : pré-cache de tous les assets pour un fonctionnement 100 % hors-ligne.
    Incrémenter CACHE_VERSION à chaque mise à jour de l'app pour invalider l'ancien cache. */
-const CACHE_VERSION = 'cagnottes-v3-euros-3';
+const CACHE_VERSION = 'cagnottes-v3-euros-4';
 const ASSETS = [
   './',
   './index.html',
@@ -52,6 +52,13 @@ self.addEventListener('fetch', e => {
     e.respondWith(
       fetch(e.request)
         .then(resp => {
+          /* NE JAMAIS mettre en cache une réponse invalide : pendant une
+             reconstruction de GitHub Pages, le site répond brièvement 404.
+             Sans ce garde-fou, cette 404 devient la page de l'app, servie
+             indéfiniment. En cas d'erreur, on préfère la copie en cache. */
+          if (!resp || !resp.ok) {
+            return caches.match('./index.html').then(r => r || resp);
+          }
           const clone = resp.clone();
           caches.open(CACHE_VERSION).then(c => c.put('./index.html', clone));
           return resp;
