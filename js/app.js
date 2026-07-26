@@ -379,11 +379,23 @@ const App = (() => {
 
   /* ---------- Initialisation ---------- */
 
+  /* Relit le solde commun (que d'autres apps ont pu faire évoluer) puis
+     redessine. Sans ça, Cagnottes resterait sur son solde en cache après un
+     gain fait ailleurs (Pronos, Discipline…). */
+  async function rafraichirEtRendre() {
+    if (document.hidden) return;
+    await Store.rafraichirSolde();
+    render();
+  }
+
   async function init() {
     /* Tout mouvement redessine l'écran courant + le bandeau Éclats */
     Store.subscribe(() => render());
-    window.addEventListener('hashchange', render);
+    window.addEventListener('hashchange', () => { render(); rafraichirEtRendre(); });
     window.addEventListener('resize', () => Views.afterRender(parseRoute()));
+    /* Retour sur l'app (autre onglet, autre app de l'écosystème) → resynchronise. */
+    document.addEventListener('visibilitychange', rafraichirEtRendre);
+    window.addEventListener('focus', rafraichirEtRendre);
 
     if (Store.state._corrupted) {
       toast('⚠️ Les données sauvegardées étaient corrompues et ont été réinitialisées.', 'error');
