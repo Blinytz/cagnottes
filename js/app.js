@@ -83,14 +83,6 @@ const App = (() => {
     }
   }
 
-  /* Rafraîchit la courbe et la valeur du taux sans redessiner tout l'écran. */
-  function majTaux() {
-    const graphe = document.getElementById('taux-graphe');
-    if (!graphe || !window.Taux) return;
-    Views.render && null;
-    render();
-  }
-
   function updateNav(route) {
     document.querySelectorAll('#bottom-nav a').forEach(a => {
       a.classList.toggle('active', a.dataset.route === route.name);
@@ -166,11 +158,6 @@ const App = (() => {
 
       case 'lancer-bascule': await lancerBascule(); break;
 
-      case 'set-fenetre-taux':
-        Views.setFenetreChange(actEl.dataset.heures);
-        render();
-        break;
-
       case 'conv-tout': {
         const hote = document.getElementById('eclats-dispo');
         const champ = document.getElementById('conv-montant');
@@ -184,9 +171,36 @@ const App = (() => {
 
       case 'reprendre-conversion': {
         const res = await Store.reprendreConversion(id);
+        await majSoldeEclats(true);
         render();
         if (res.ok) toast(`✅ Conversion confirmée : ${U.fmtEuros(res.centimes)}.`, 'success');
         else toast('📡 Registre injoignable : conversion non effectuée.', 'error');
+        break;
+      }
+
+      case 'rendre-conversion': {
+        const c = Store.bourse.conversion(id);
+        if (!c) return;
+        /* Une reprise déjà entamée se rejoue sans nouvelle confirmation :
+           les euros ont quitté la Bourse, seuls les Éclats manquent encore. */
+        if (!c.reprise) {
+          const ok = await Views.confirmDialog(
+            `Rendre <strong>${U.fmtEuros(c.centimes)}</strong> sous forme de
+             <strong>${U.fmtEclats(c.eclats)}</strong> ?<br>
+             <span class="muted small">Ces euros quitteront la Bourse et retourneront
+             au registre commun.</span>`,
+            { okLabel: 'Rendre' });
+          if (!ok) return;
+        }
+        const res = await Store.rendreConversion(id);
+        await majSoldeEclats(true);
+        render();
+        if (res.ok) toast(`✦ ${U.fmtEclats(res.eclats)} rendus au registre commun.`, 'success');
+        else if (res.reason === 'euros_engages') {
+          toast('Ces euros sont déjà engagés dans une cagnotte. Annule d’abord un versement.', 'error');
+        } else {
+          toast('📡 Registre injoignable : les Éclats ne sont pas encore rendus. Réessaie depuis « À confirmer ».', 'error');
+        }
         break;
       }
 
@@ -362,14 +376,13 @@ const App = (() => {
       if (res.ok) {
         await Store.rafraichirSolde();
         render();
-        toast(res.converti
-          ? `✅ Sauvegarde en euros restaurée et convertie en Éclats (1 € = ${res.rapport.taux} ✦).`
-          : '✅ Données restaurées avec succès.', 'success');
+        toast('✅ Données restaurées avec succès.', 'success');
         location.hash = '#/';
       } else {
-        toast(res.reason === 'json_invalide'
-          ? '❌ Fichier illisible : ce n’est pas du JSON valide.'
-          : '❌ Fichier invalide : structure de sauvegarde non reconnue.', 'error');
+        toast({
+          json_invalide: '❌ Fichier illisible : ce n’est pas du JSON valide.',
+          version_incompatible: '❌ Sauvegarde d’une version antérieure de Cagnottes : elle ne peut pas être restaurée telle quelle.',
+        }[res.reason] || '❌ Fichier invalide : structure de sauvegarde non reconnue.', 'error');
       }
     }
   });
@@ -411,8 +424,8 @@ const App = (() => {
       const sim = Store.bourse.simuler(montant);
       const ok = await Views.confirmDialog(
         `Convertir <strong>${U.fmtEclats(sim.eclats)}</strong> en
-         <strong>${U.fmtEuros(sim.centimes)}</strong> au taux ×${sim.taux.toFixed(2)} ?<br>
-         <span class="muted small">Cette opération est définitive.</span>`,
+         <strong>${U.fmtEuros(sim.centimes)}</strong> ?<br>
+         <span class="muted small">Tu pourras rendre ce que tu ne verses pas.</span>`,
         { okLabel: 'Convertir' });
       if (!ok) return;
       const res = await Store.convertirEclats(montant);
@@ -538,7 +551,7 @@ const App = (() => {
       <h2 class="modal-title">Cagnottes repasse aux euros 💶</h2>
       <p>Une cagnotte « 600 € », c'est plus parlant que « 60 000 ✦ ». Désormais tes
         cagnottes sont en euros, et les Éclats se <strong>convertissent</strong> en euros
-        à un taux qui varie entre ×0,60 et ×1,40 — à toi de choisir le bon moment.</p>
+        depuis l'écran Change. Ce que tu ne verses pas peut repartir en Éclats.</p>
       <p class="hint">Tes versements de test seront <strong>intégralement remboursés</strong>
         en Éclats. Tes cagnottes, objectifs et images sont conservés ; elles repartent
         simplement à zéro.</p>
@@ -562,5 +575,5 @@ const App = (() => {
     }
   }
 
-  return { init, render, majTaux, proposerBascule };
+  return { init, render, proposerBascule };
 })();

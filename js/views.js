@@ -11,12 +11,6 @@ const Views = (() => {
   const ranges = {};
   const RANGE_DAYS = { '7j': 7, '30j': 30, 'tout': null };
 
-  /* Fenêtre de la courbe du taux (heures), et liste servie par le moteur.
-     Lue à l'usage : `main.js` la publie après le chargement des scripts. */
-  let fenetreChange = 24;
-  const fenetresTaux = () => window.FENETRES_TAUX || [{ heures: 24, libelle: '24 h' }];
-  function setFenetreChange(h) { fenetreChange = Number(h) || 24; }
-
   /* ---------- Helpers de rendu ---------- */
 
   function imgHTML(image, cls = '') {
@@ -304,30 +298,29 @@ const Views = (() => {
     const recompense = Store.totalRecompense();
     const connecte = !!(window.Registre && window.Registre.estConnecte());
     const email = connecte ? (window.Registre.utilisateur()?.email || '') : '';
-    const taux = window.Taux;
-    const t = taux.actuel();
-    const zone = taux.zone();
     const souffranceV = Store.eclats.enSouffrance();
     const souffranceC = Store.bourse.enSouffrance();
+    const rendables = Store.bourse.annulables();
     const conversions = Store.bourse.toutesConversions()
       .filter(c => c.statut === 'confirmee').slice(0, 8);
     const tot = Store.bourse.totaux();
-
-    const libelleZone = { basse: 'Zone basse — mieux vaut attendre',
-      haute: 'Zone haute — bon moment pour convertir',
-      neutre: 'Zone neutre' }[zone];
 
     const rejeuHTML = (souffranceV.length || souffranceC.length) ? `
       <div class="panel">
         <h2>À confirmer</h2>
         <p class="hint">Ces opérations n'ont pas abouti : elles ne sont pas comptabilisées.</p>
         <ul class="mvt-list">
-          ${souffranceC.map(c => `<li class="mvt">
-            <span class="mvt-montant neg">${U.fmtEclats(c.eclatsDemandes)}</span>
-            <span class="mvt-info">Conversion au taux ×${c.taux.toFixed(2)}<br>
-              <span class="muted small">${U.esc(c.erreur || 'En attente')}</span></span>
-            <button class="btn secondary small" data-action="reprendre-conversion" data-id="${c.id}">Réessayer</button>
-          </li>`).join('')}
+          ${souffranceC.map(c => {
+            const enReprise = !!c.reprise;
+            return `<li class="mvt">
+              <span class="mvt-montant neg">${U.fmtEclats(enReprise ? c.eclats : c.eclatsDemandes)}</span>
+              <span class="mvt-info">${enReprise ? 'Reprise en Éclats' : 'Conversion en euros'}<br>
+                <span class="muted small">${U.esc((enReprise ? c.reprise.erreur : c.erreur) || 'En attente')}</span></span>
+              <button class="btn secondary small"
+                data-action="${enReprise ? 'rendre-conversion' : 'reprendre-conversion'}"
+                data-id="${c.id}">Réessayer</button>
+            </li>`;
+          }).join('')}
           ${souffranceV.map(v => {
             const c = Store.getCagnotte(v.cagnotteId);
             return `<li class="mvt">
@@ -340,26 +333,53 @@ const Views = (() => {
         </ul>
       </div>` : '';
 
+    /*
+     * Rendre des euros = défaire une conversion entière. Le registre commun ne
+     * sait que rembourser une dépense passée — c'est ce qui garantit que
+     * Cagnottes ne puisse jamais fabriquer d'Éclats.
+     */
+    const rendreHTML = (connecte && rendables.length) ? `
+      <div class="panel">
+        <h2>Rendre des euros</h2>
+        <p class="hint">Les euros que tu n'as pas versés peuvent repartir en Éclats.
+          Une conversion se reprend entière : celles dont la somme est déjà engagée
+          dans une cagnotte n'apparaissent pas ici.</p>
+        <ul class="mvt-list">
+          ${rendables.map(c => `<li class="mvt">
+            <span class="mvt-montant neg">−${U.fmtEuros(c.centimes)}</span>
+            <span class="mvt-info">Rendrait ${U.fmtEclats(c.eclats)}<br>
+              <span class="muted small">converti le ${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
+            <button class="btn secondary small" data-action="rendre-conversion" data-id="${c.id}">Rendre</button>
+          </li>`).join('')}
+        </ul>
+      </div>` : '';
+
     const histoHTML = conversions.length ? `
       <div class="panel">
         <h2>Dernières conversions</h2>
         <ul class="mvt-list">
-          ${conversions.map(c => `<li class="mvt">
-            <span class="mvt-montant pos">+${U.fmtEuros(c.centimes)}</span>
-            <span class="mvt-info">${U.fmtEclats(c.eclats)} convertis · taux ×${c.taux.toFixed(2)}<br>
-              <span class="muted small">${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
-          </li>`).join('')}
+          ${conversions.map(c => {
+            const rendue = c.reprise?.statut === 'confirmee';
+            return `<li class="mvt">
+              <span class="mvt-montant ${rendue ? 'neg' : 'pos'}">${rendue ? '−' : '+'}${U.fmtEuros(c.centimes)}</span>
+              <span class="mvt-info">${rendue
+                ? `${U.fmtEclats(c.eclats)} rendus au registre`
+                : `${U.fmtEclats(c.eclats)} convertis`}<br>
+                <span class="muted small">${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
+            </li>`;
+          }).join('')}
         </ul>
-        <p class="hint">${tot.nb} ${U.plural(tot.nb, 'conversion')} · ${U.fmtEclats(tot.eclats)}
-          transformés en ${U.fmtEuros(tot.centimes)}.</p>
+        <p class="hint">${tot.nb} ${U.plural(tot.nb, 'conversion')} en cours ·
+          ${U.fmtEclats(tot.eclats)} transformés en ${U.fmtEuros(tot.centimes)}${tot.nbReprises
+            ? ` · ${U.fmtEclats(tot.eclatsRendus)} rendus` : ''}.</p>
       </div>` : '';
 
     const conversionHTML = connecte ? `
       <div class="panel">
         <h2>Convertir des Éclats en euros</h2>
-        <p class="hint">Tu choisis la part que tu veux transformer — pas besoin de tout convertir.
-          Le taux appliqué est celui affiché au moment où tu valides.
-          <strong>La conversion est définitive.</strong></p>
+        <p class="hint">Tu choisis la part que tu veux transformer — pas besoin de tout
+          convertir. Convertis au fil de l'eau : de petits montants se reprennent plus
+          facilement.</p>
         <form id="form-conversion" class="montant-libre">
           <div class="field-row">
             <input type="text" id="conv-montant" name="montant" inputmode="numeric"
@@ -398,23 +418,6 @@ const Views = (() => {
       </div>
 
       <div class="panel">
-        <div class="taux-entete">
-          <div>
-            <div class="taux-valeur">×${t.toFixed(2)}</div>
-            <div class="muted small">100 ✦ = ${U.fmtEuros(Math.floor(t * 100))}</div>
-          </div>
-          <div class="taux-zone zone-${zone}">${libelleZone}</div>
-        </div>
-        <div id="taux-graphe">${taux.svg(fenetreChange, 320, 120)}</div>
-        <div class="range-selector">
-          ${fenetresTaux().map(f => `<button class="range-btn${f.heures === fenetreChange ? ' active' : ''}"
-            data-action="set-fenetre-taux" data-heures="${f.heures}">${f.libelle}</button>`).join('')}
-        </div>
-        <p class="hint">Le taux varie entre ×0,60 et ×1,40 et continue d'évoluer même
-          application fermée.</p>
-      </div>
-
-      <div class="panel">
         <h2>Mes Éclats</h2>
         <div id="eclats-dispo"><p class="muted">Lecture du registre…</p></div>
         ${connecte ? `<p class="hint">✓ Connecté${email ? ` · <strong>${U.esc(email)}</strong>` : ''}.
@@ -422,14 +425,15 @@ const Views = (() => {
       </div>
 
       ${conversionHTML}
+      ${rendreHTML}
       ${rejeuHTML}
       ${histoHTML}
 
       <div class="panel">
         <h2>D'où viennent les euros ?</h2>
-        <p class="muted">Cagnottes ne crée jamais d'argent : elle transforme des Éclats
-          gagnés dans les autres applications (Pronos, Discipline…) en euros, au taux
-          du moment, puis tu les répartis dans tes cagnottes.</p>
+        <p class="muted">Cagnottes ne crée jamais d'argent : elle transforme en euros des
+          Éclats gagnés dans les autres applications (Pronos, Discipline…), puis tu les
+          répartis dans tes cagnottes. Ce que tu ne verses pas peut repartir en Éclats.</p>
       </div>
     </section>`;
   }
@@ -444,11 +448,9 @@ const Views = (() => {
     }
     try {
       const solde = await window.Registre.solde();
-      const t = window.Taux.actuel();
       hote.innerHTML = `<div class="eclats-dispo-ligne">
         <span class="eclats-dispo-val">${U.fmtEclats(solde)}</span>
-        <span class="muted small">disponibles · soit ${U.fmtEuros(window.Taux.centimesPour(solde, t))}
-          au taux actuel</span>
+        <span class="muted small">disponibles · soit ${U.fmtEuros(Math.floor(solde))}</span>
       </div>`;
       hote.dataset.solde = String(Math.floor(solde));
     } catch (e) {
@@ -469,8 +471,7 @@ const Views = (() => {
     }
     const sim = Store.bourse.simuler(n);
     apercu.className = 'conv-apercu actif';
-    apercu.innerHTML = `${U.fmtEclats(sim.eclats)} → <strong>${U.fmtEuros(sim.centimes)}</strong>
-      <span class="muted small">(taux ×${sim.taux.toFixed(2)})</span>`;
+    apercu.innerHTML = `${U.fmtEclats(sim.eclats)} → <strong>${U.fmtEuros(sim.centimes)}</strong>`;
   }
   /* ---------- Écran 6 : Réglages ---------- */
 
@@ -479,7 +480,7 @@ const Views = (() => {
     let taille = '';
     try {
       const cles = ['cagnottes_app_state_v1', 'cagnottes_versements_euro_v1',
-        'cagnottes_bourse_v1', 'cagnottes_conversions_v1', 'cagnottes_taux_v1'];
+        'cagnottes_bourse_v1', 'cagnottes_conversions_v1'];
       const octets = cles.reduce((s, k) => s + (localStorage.getItem(k) || '').length, 0) * 2;
       taille = (octets / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' Ko';
     } catch { taille = '?'; }
@@ -534,7 +535,7 @@ const Views = (() => {
         <p class="muted">Cagnottes v3 (euros) · ${nb} ${U.plural(nb, 'cagnotte')} · ${taille} utilisés ·
           registre commun ${connecte ? 'connecté' : 'non connecté'}</p>
         <p class="muted small">Les cagnottes sont en euros. Les Éclats se convertissent en
-          euros depuis l'écran Change, à un taux qui varie entre ×0,60 et ×1,40.</p>
+          euros depuis l'écran Change, et ce qui n'est pas versé peut repartir en Éclats.</p>
         <button class="btn danger" data-action="reset-data">🗑 Effacer toutes les données</button>
       </div>
     </section>`;
@@ -778,7 +779,7 @@ const Views = (() => {
 
   return {
     viewHome, viewCagnotte, viewStats, viewArchives, viewChange, viewReglages,
-    majApercuConversion, setFenetreChange, chargerEclatsDispo,
+    majApercuConversion, chargerEclatsDispo,
     openModal, closeModal, confirmDialog, cagnotteFormModal, celebrate,
     afterRender, ranges
   };

@@ -61,8 +61,9 @@ export function createRegistreLocal({
     return etat.mouvements.reduce((s, m) => s + m.amount, 0);
   }
 
-  function parCle(cle) {
-    return etat.mouvements.find((m) => m.idempotency_key === cle) || null;
+  /* `k` et non `cle` : ne pas masquer la clé de stockage de la fabrique. */
+  function parCle(k) {
+    return etat.mouvements.find((m) => m.idempotency_key === k) || null;
   }
 
   // Écriture brute dans le journal. Idempotente par clé : une clé déjà présente
@@ -241,5 +242,11 @@ export function createRegistreLocal({
     _inserer: inserer,
     _etat: () => etat,
     _recharger: () => { etat = charger(); return etat; },
+    /* Remplace le journal entier (restauration d'une sauvegarde). */
+    _remplacer: (nouvel) => {
+      etat = (nouvel && Array.isArray(nouvel.mouvements)) ? nouvel : { version: 1, mouvements: [] };
+      sauver();
+      return etat;
+    },
   };
 }

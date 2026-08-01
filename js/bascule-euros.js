@@ -2,8 +2,8 @@
 //
 // Décision du 26/07/2026 : les cagnottes reviennent aux euros, qui ont plus de
 // sens pour de l'épargne. Les Éclats restent la monnaie de l'écosystème et ne
-// deviennent des euros que par une CONVERSION explicite, à un taux fluctuant
-// (voir `bourse-taux.js` et `bourse.js`).
+// deviennent des euros que par une CONVERSION explicite, à la parité fixe
+// 100 ✦ = 1 € (voir `bourse.js`).
 //
 // Deux propriétés rendent cette bascule sûre :
 //
@@ -14,8 +14,8 @@
 //   2. **Aucun Éclat perdu.** Les versements de test faits en Éclats sont
 //      intégralement remboursés au registre commun AVANT la bascule (orchestré
 //      par le Store). Les cagnottes repartent vides, avec leurs noms, objectifs,
-//      images et ordre intacts. La Bourse démarre donc à 0 € : c'est à toi de
-//      convertir des Éclats quand le taux te convient.
+//      images et ordre intacts. La Bourse démarre donc à 0 € : c'est à toi d'y
+//      convertir des Éclats.
 //
 // Ce module ne contient que des fonctions PURES : il ne touche ni au stockage
 // ni au réseau. Le Store décide quand les appliquer.

@@ -1,11 +1,11 @@
 // Store : état des cagnottes, persistance localStorage, logique métier.
 //
-// Depuis la bascule du 26/07/2026, Cagnottes compte de nouveau en **EUROS**
-// (en centimes entiers). Les Éclats restent la monnaie de l'écosystème : ils
-// n'entrent dans Cagnottes que par une CONVERSION explicite, à un taux
-// fluctuant, qui alimente la **Bourse** (voir `bourse.js`).
+// Cagnottes compte en **EUROS** (en centimes entiers). Les Éclats restent la
+// monnaie de l'écosystème : ils n'entrent dans Cagnottes que par une CONVERSION
+// explicite, au taux fixe 100 ✦ = 1 €, qui alimente la **Bourse**
+// (voir `bourse.js`). La conversion est réversible.
 //
-//     Éclats communs ──(conversion au taux)──▶ Bourse (€) ──▶ Cagnottes (€)
+//     Éclats communs ◀──▶ Bourse (€) ──▶ Cagnottes (€)
 //
 // Répartition des responsabilités :
 //   * ce module détient les données MÉTIER d'une cagnotte (nom, image,
@@ -183,6 +183,13 @@ export function creerStore({
     return res;
   }
 
+  /* Rend une conversion : les euros non utilisés repartent en Éclats. */
+  async function rendreConversion(conversionId) {
+    const res = await bourse.rendre(conversionId);
+    notify();
+    return res;
+  }
+
   /* ---------- CRUD cagnottes ---------- */
 
   function getCagnotte(id) { return state.cagnottes.find(c => c.id === id); }
@@ -294,7 +301,8 @@ export function creerStore({
       unite: 'centimes',
       state,
       versements: versements._etat().versements,
-      bourse: bourse._etat(),
+      conversions: bourse._etat(),
+      bourse: bourse._journalEtat(),
     }, null, 2);
   }
 
@@ -311,8 +319,14 @@ export function creerStore({
       return { ok: false, reason: 'version_incompatible' };
     }
 
+    /*
+     * Tout est restauré ensemble : les cagnottes, les versements qui portent
+     * leurs montants, et les deux journaux de la Bourse. N'en restaurer qu'une
+     * partie produirait des soldes qui ne se répondent plus.
+     */
     state = normalize(s);
     versements.remplacerVersements(parsed.versements || {});
+    bourse._remplacer({ conversions: parsed.conversions, journal: parsed.bourse });
     notify();
     return { ok: true };
   }
@@ -514,7 +528,7 @@ export function creerStore({
     validerCagnotte, reactiverCagnotte,
     alimenter, retirer, annulerVersement, prochainRetrait,
     soldeDisponible, rafraichirSolde, totalEngage, totalRecompense,
-    convertirEclats, reprendreConversion, basculerVersEuros,
+    convertirEclats, reprendreConversion, rendreConversion, basculerVersEuros,
     reordonner, resetOrdre,
     balanceSeries, estimation, stats,
     exportJSON, importJSON, resetAll,

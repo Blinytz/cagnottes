@@ -1,58 +1,61 @@
-# Cagnottes : euros, Bourse et taux de change
+# Cagnottes : euros, Bourse et Éclats
 
 Cagnottes compte en **euros** (en centimes entiers). Les Éclats restent la
 monnaie de l'écosystème : ils n'entrent dans Cagnottes que par une
-**conversion explicite**, à un taux qui fluctue.
+**conversion explicite**, à la parité fixe **100 ✦ = 1 €**.
 
 ```
-Éclats communs ──(conversion au taux du moment)──▶ Bourse (€) ──▶ Cagnottes (€)
-   Pronos, Discipline…              définitive              versements locaux
+Éclats communs ◀──(100 ✦ = 1 €)──▶ Bourse (€) ──▶ Cagnottes (€)
+   Pronos, Discipline…              réversible        versements locaux
 ```
 
-Décision du 26/07/2026 : une cagnotte « Téléphone à 600 € » est parlante,
-« 60 000 ✦ » ne l'est pas. La conversion introduit en plus un vrai choix —
-attendre un bon taux — repris du moteur de WikiDeck.
+La Bourse est un **intermédiaire volontaire** : on y convertit au fil de l'eau,
+puis on répartit dans les cagnottes. Verser ne parle donc jamais au réseau —
+seule la conversion le fait. Et ce qu'on n'a pas versé peut repartir en Éclats.
 
-## Le taux de change
-
-| Paramètre | Valeur |
-|---|---|
-| Parité de référence | 100 ✦ = 1 € au taux ×1.00 |
-| Bornes | ×0,60 à ×1,40 (100 ✦ valent 0,60 € à 1,40 €) |
-| Régimes | bas (40 %), haut (40 %), neutre (20 %), 20 min à 1 h 30 chacun |
-| Rythme | un pas toutes les 10 s, lissage + bruit |
-| Hors ligne | le temps écoulé est rejoué au retour (jusqu'à 7 jours) |
-| Courbe | 6 h · 12 h · 24 h · 2 j · 4 j · 7 j |
-
-Le taux est **local à l'appareil**, comme dans WikiDeck. Sur 7 jours simulés il
-parcourt toute la plage, avec une moyenne de 0,995 et 38 % du temps en zone haute.
+La parité étant fixe, **1 Éclat = 1 centime** : il n'y a aucun calcul de
+conversion, seulement un changement d'unité. Une cagnotte « Téléphone à 600 € »
+reste parlante là où « 60 000 ✦ » ne l'était pas.
 
 ## Ce qui est livré
 
 | Fichier | Rôle |
 |---|---|
-| `js/bourse-taux.js` | Moteur du taux : régimes, rattrapage hors-ligne, historique, courbe SVG, conversion en centimes. |
-| `js/bourse.js` | La Bourse : conversion Éclats → euros (dépense réelle d'Éclats + crédit en euros), journal des conversions. |
-| `js/bascule-euros.js` | Passage v2 (Éclats) → v3 (euros), fonctions pures. |
-| `js/eclats-local.js` | Journal local générique (clé paramétrable, `crediter` ajouté) — sert de Bourse. |
+| `js/bourse.js` | La Bourse : conversion Éclats → euros, reprise euros → Éclats, journal des conversions. Porte la parité. |
+| `js/eclats-local.js` | Journal local générique (clé paramétrable) — sert de Bourse. |
 | `js/eclats-cagnottes.js` | Journal des versements, branché sur la Bourse. |
 | `js/eclats-registre.js` | Client du registre commun (Supabase), pour les conversions. |
+| `js/bascule-euros.js` | Passage v2 (Éclats) → v3 (euros), fonctions pures. |
 | `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient l'argent.** |
-| `tests/` | 59 tests (`node --test`). |
+| `tests/` | 38 tests (`node --test "tests/*.test.mjs"`). |
 
 ## Règles d'une conversion
 
 - Elle **dépense réellement des Éclats** (`eclats_spend`, confirmée par le serveur).
 - **Tu choisis le montant** : une part de tes Éclats, pas forcément tout.
-- Le **taux est figé au moment de la demande**. Un rejeu après une panne réseau
-  applique le taux d'origine — sinon il suffirait d'attendre une hausse pour
-  s'enrichir sur un échec.
 - Les euros crédités portent sur les Éclats **réellement dépensés** (le registre
   plafonne au solde disponible).
-- Elle est **définitive** : convertir bas puis annuler haut fabriquerait des
-  Éclats. Aucune annulation n'est proposée.
 - Elle est **idempotente** : double clic, rejeu ou rechargement ne convertissent
   jamais deux fois.
+
+## Rendre des euros = défaire une conversion
+
+Le registre commun ne sait pas créditer des Éclats, seulement **rembourser une
+dépense passée** (`eclats_refund`). C'est une garantie, pas une gêne : elle rend
+structurellement impossible qu'une application fabrique des Éclats.
+
+Une reprise porte donc sur une **conversion entière**, et seulement tant que la
+Bourse détient encore la somme correspondante — le reste étant engagé dans des
+cagnottes. Pour libérer une conversion, il faut d'abord annuler un versement.
+D'où le conseil affiché à l'écran : convertir au fil de l'eau, en petits
+montants, qui se reprennent plus facilement.
+
+L'ordre des opérations est délibéré : les euros quittent d'abord la Bourse
+(local, sûr), puis les Éclats sont rendus au registre (réseau, faillible). Si le
+réseau lâche entre les deux, les euros sont « en transit », l'opération est
+signalée dans **À confirmer** et rejouable — le remboursement étant idempotent,
+rejouer ne rend jamais deux fois. L'ordre inverse aurait pu faire coexister les
+euros **et** les Éclats : de la valeur créée à partir de rien.
 
 ## La bascule vers les euros
 
@@ -63,27 +66,28 @@ une bascule reportée que des Éclats perdus. Une copie de l'état « tout en É
 est conservée dans `cagnottes_sauvegarde_eclats_v2`.
 
 Les cagnottes gardent nom, image, objectif, palier et ordre ; elles repartent
-vides. La Bourse démarre à 0 € : c'est à toi de convertir quand le taux te plaît.
+vides. La Bourse démarre à 0 € : c'est à toi de convertir.
 
-> Détail utile : la bascule précédente valait 1 € = 100 ✦, donc **1 Éclat = 1
-> centime**. Les objectifs gardent leur valeur numérique — 60 000 ✦ *sont*
-> 600,00 €. Aucun arrondi, aucune perte.
+> Les objectifs gardent leur valeur numérique — 60 000 ✦ *sont* 600,00 €.
+> Aucun arrondi, aucune perte.
 
 ## Dans l'interface
 
-- Le bandeau haut affiche la **Bourse en euros** et le total engagé.
-- L'onglet **Change** montre le taux en direct, sa zone (haute/basse/neutre), la
-  courbe avec choix de fenêtre, tes Éclats disponibles et leur équivalent au taux
-  courant, le champ de conversion avec **aperçu en direct**, et l'historique des
-  conversions.
-- Verser dans une cagnotte puise dans la **Bourse** : plus aucune dépendance au
-  réseau pour l'usage quotidien. Seule la conversion parle au registre commun.
+- Le bandeau haut affiche les deux monnaies, jamais confondues : les **Éclats**
+  du registre commun à gauche, la **Bourse en euros** à droite.
+- L'onglet **Change** montre la Bourse, tes Éclats disponibles et leur équivalent,
+  le champ de conversion avec aperçu en direct, la liste des conversions
+  reprenables, et l'historique.
+- Verser dans une cagnotte puise dans la **Bourse** : aucune dépendance au réseau
+  pour l'usage quotidien.
 - Le « − » annule le dernier versement encore engagé, pour son montant exact.
 
 ## Garde-fous
 
 - Aucune clé `service_role` dans le navigateur.
 - Les euros sont des **centimes entiers** : pas de dérive de flottant.
-- La conversion arrondit **à l'inférieur** — jamais un centime offert.
 - Le montant d'une cagnotte est dérivé de ses versements, jamais recopié.
 - Une opération non confirmée n'est **jamais** présentée comme comptabilisée.
+- L'export embarque les **deux** journaux de la Bourse (les euros et les
+  conversions qui les ont produits) ; l'import les restaure **ensemble**. Séparés,
+  ils décriraient un solde sans origine.
