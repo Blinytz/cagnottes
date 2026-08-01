@@ -7,27 +7,31 @@
 //
 //     Éclats communs ◀──▶ Bourse (€) ──▶ Cagnottes (€)
 //
-// Le taux est FIXE : 100 ✦ = 1 €, donc 1 Éclat = 1 centime. Il n'y a rien à
-// arbitrer, rien à attendre, et la conversion est **réversible** : les euros
-// non utilisés repartent en Éclats.
+// Le taux est FIXE : 100 ✦ = 1 €, donc 1 Éclat = 1 centime. Rien à arbitrer,
+// rien à attendre, et la conversion est réversible : **tout ou partie** du
+// contenu de la Bourse peut repartir en Éclats.
 //
 // Tout est compté en CENTIMES entiers : aucune dérive de flottant possible.
 //
-// Rendre des euros = DÉFAIRE une conversion
-// -----------------------------------------
-// Le registre commun ne sait pas créditer des Éclats, seulement rembourser une
-// dépense passée (`eclats_refund`). C'est une garantie, pas une gêne : elle
-// rend structurellement impossible qu'une application fabrique des Éclats. Une
-// reprise porte donc sur une conversion entière, et seulement tant que la
-// Bourse détient encore la somme correspondante — le reste étant engagé dans
-// les cagnottes.
+// Seule la Bourse est reprenable
+// ------------------------------
+// Ce qui est déjà versé dans une cagnotte n'est pas repris : il faut d'abord
+// l'en sortir (annuler un versement, ou supprimer la cagnotte, ce qui rend
+// automatiquement ses euros à la Bourse). La reprise porte donc toujours sur le
+// solde disponible, et sur lui seul.
 //
-// Règles d'une conversion :
-//   * elle DÉPENSE réellement des Éclats (`eclats_spend`, confirmée serveur) ;
-//   * les euros crédités portent sur les Éclats RÉELLEMENT dépensés (le
-//     registre plafonne au solde disponible) ;
-//   * elle est idempotente : double clic, rejeu ou rechargement ne convertissent
-//     jamais deux fois — et une reprise ne recrédite jamais deux fois.
+// Comment un montant libre est possible
+// -------------------------------------
+// Le registre commun ne sait pas créditer des Éclats, seulement rembourser une
+// dépense passée, et **en entier** (`eclats_refund`). C'est la garantie qui rend
+// structurellement impossible qu'une application fabrique des Éclats.
+//
+// Pour rendre 20 € alors que la seule conversion passée en valait 50, on
+// rembourse donc la conversion entière (+5 000 ✦) puis on en reconvertit
+// aussitôt le reliquat (−3 000 ✦). Net : 2 000 ✦ rendus, 30 € conservés. Ce
+// réancrage est interne ; l'utilisateur demande simplement un montant.
+//
+// Invariant maintenu : solde = Σ(conversions actives) − Σ(engagé en cagnottes).
 
 export const APP_ID = 'cagnottes';
 export const BOURSE_JOURNAL_KEY = 'cagnottes_bourse_v1';
@@ -51,7 +55,7 @@ export const CONVERSION_STATUT = {
 };
 
 export const REPRISE_STATUT = {
-  EN_ATTENTE: 'en_attente', // euros retirés de la Bourse, Éclats pas encore rendus
+  EN_COURS: 'en_cours',     // euros retirés, Éclats pas encore tous rendus
   CONFIRMEE: 'confirmee',   // Éclats rendus au registre commun
   ERREUR: 'erreur',         // incident réseau — rejouable, rien n'est perdu
 };
@@ -89,10 +93,11 @@ export function createBourse({
   function charger() {
     try {
       const parsed = JSON.parse(store.getItem(CONVERSIONS_KEY) || 'null');
-      if (!parsed || typeof parsed.conversions !== 'object') return { conversions: {} };
+      if (!parsed || typeof parsed.conversions !== 'object') return { conversions: {}, reprises: {} };
+      if (typeof parsed.reprises !== 'object' || !parsed.reprises) parsed.reprises = {};
       return parsed;
     } catch {
-      return { conversions: {} };
+      return { conversions: {}, reprises: {} };
     }
   }
 
@@ -112,49 +117,50 @@ export function createBourse({
     return journal._etat().mouvements.reduce((s, m) => s + m.amount, 0);
   }
 
+  /* Tout le solde disponible est reprenable — et rien de plus. */
+  function maxRendable() { return Math.max(0, soldeCentimes()); }
+
   function conversion(id) { return etat.conversions[id] || null; }
   function toutesConversions() {
     return Object.values(etat.conversions)
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
+  function reprise(id) { return etat.reprises[id] || null; }
+  function toutesReprises() {
+    return Object.values(etat.reprises)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
 
   function estConfirmee(c) { return c.statut === CONVERSION_STATUT.CONFIRMEE; }
-  function estReprise(c) { return c.reprise?.statut === REPRISE_STATUT.CONFIRMEE; }
+
+  /* Conversions encore actives : confirmées et pas encore consommées par une
+     reprise. Ce sont elles qui « adossent » les euros en circulation. */
+  function conversionsActives() {
+    return toutesConversions().filter((c) => estConfirmee(c) && !c.repriseId);
+  }
 
   /* Opérations non abouties : l'UI propose de les rejouer. */
   function enSouffrance() {
-    return toutesConversions().filter((c) => c.statut === CONVERSION_STATUT.ERREUR
-      || c.statut === CONVERSION_STATUT.EN_ATTENTE
-      || c.reprise?.statut === REPRISE_STATUT.EN_ATTENTE
-      || c.reprise?.statut === REPRISE_STATUT.ERREUR);
+    return [
+      ...toutesConversions().filter((c) => c.statut === CONVERSION_STATUT.ERREUR
+        || c.statut === CONVERSION_STATUT.EN_ATTENTE),
+      ...toutesReprises().filter((r) => r.statut !== REPRISE_STATUT.CONFIRMEE),
+    ];
   }
 
-  /*
-   * Conversions qu'on peut défaire : confirmées, pas déjà reprises, et dont la
-   * Bourse détient encore la somme. Le reste est engagé dans des cagnottes —
-   * il faut d'abord annuler des versements pour le libérer.
-   */
-  function annulables() {
-    const disponible = soldeCentimes();
-    return toutesConversions()
-      .filter((c) => estConfirmee(c) && !estReprise(c)
-        && !c.reprise && c.centimes > 0 && c.centimes <= disponible);
-  }
-
-  /* Total des Éclats convertis et des euros obtenus, pour les statistiques. */
   function totaux() {
-    const faites = toutesConversions().filter((c) => estConfirmee(c) && !estReprise(c));
-    const reprises = toutesConversions().filter(estReprise);
+    const actives = conversionsActives();
+    const faites = toutesReprises().filter((r) => r.statut === REPRISE_STATUT.CONFIRMEE);
     return {
-      nb: faites.length,
-      eclats: faites.reduce((s, c) => s + c.eclats, 0),
-      centimes: faites.reduce((s, c) => s + c.centimes, 0),
-      nbReprises: reprises.length,
-      eclatsRendus: reprises.reduce((s, c) => s + c.eclats, 0),
+      nb: actives.length,
+      eclats: actives.reduce((s, c) => s + c.eclats, 0),
+      centimes: actives.reduce((s, c) => s + c.centimes, 0),
+      nbReprises: faites.length,
+      eclatsRendus: faites.reduce((s, r) => s + r.centimes, 0),
     };
   }
 
-  /* Aperçu, sans rien engager : ce que donnerait la conversion. */
+  /* Aperçu, sans rien engager. */
   function simuler(eclatsDemandes) {
     const n = Math.floor(eclatsDemandes) || 0;
     return { eclats: n, centimes: centimesPour(n) };
@@ -167,7 +173,6 @@ export function createBourse({
     rec.erreur = null;
     sauver();
     try {
-      // 1. Dépense réelle d'Éclats (plafonnée au solde par le registre).
       const dep = await eclats.depenser({
         appId: APP_ID,
         montant: rec.eclatsDemandes,
@@ -177,11 +182,9 @@ export function createBourse({
         idempotencyKey: cleSpend(rec.id),
       });
       const eclatsDepenses = Number(dep.amount);
-
-      // 2. Euros correspondants, sur les Éclats réellement dépensés.
       const centimes = centimesPour(eclatsDepenses);
 
-      // 3. Crédit de la Bourse. Idempotent : un rejeu ne crédite pas deux fois.
+      // Crédit de la Bourse. Idempotent : un rejeu ne crédite pas deux fois.
       if (centimes > 0) {
         await journal.crediter({
           appId: APP_ID,
@@ -237,7 +240,7 @@ export function createBourse({
         createdAt: now(),
         movementId: null,
         ajuste: false,
-        reprise: null,
+        repriseId: null,
         erreur: null,
       };
       etat.conversions[id] = rec;
@@ -267,109 +270,190 @@ export function createBourse({
   // ---- Écriture : rendre des euros sous forme d'Éclats ----
 
   /*
-   * Ordre volontaire : on retire d'abord les euros de la Bourse (local, sûr),
-   * puis on rend les Éclats au registre (réseau, faillible). Si le réseau
-   * lâche entre les deux, les euros sont « en transit » et l'opération est
-   * rejouable — le remboursement étant idempotent, rejouer ne rend jamais deux
-   * fois. L'ordre inverse aurait pu, lui, faire coexister les euros ET les
-   * Éclats : de la valeur créée à partir de rien.
+   * Exécution d'une reprise, étape par étape et REPRENABLE : chaque étape est
+   * idempotente et note son avancement, donc rejouer après une coupure ne
+   * refait que ce qui manque.
+   *
+   * L'ordre est délibéré. Les euros quittent la Bourse EN PREMIER (local, sûr),
+   * avant tout échange avec le registre. Toute interruption laisse donc
+   * l'utilisateur avec moins que son dû — jamais avec plus, ce qui reviendrait
+   * à créer de la valeur. C'est aussi pourquoi une reprise inachevée est
+   * signalée et rejouée : elle se répare toujours vers le haut.
    */
-  async function envoyerReprise(rec) {
-    rec.reprise.statut = REPRISE_STATUT.EN_ATTENTE;
-    rec.reprise.erreur = null;
+  async function executer(rec) {
+    rec.statut = REPRISE_STATUT.EN_COURS;
+    rec.erreur = null;
     sauver();
     try {
-      const res = await eclats.rembourser({
-        appId: APP_ID,
-        referenceType: 'conversion_euro',
-        referenceId: rec.id,
-        reason: 'Reprise : euros non utilisés rendus en Éclats',
-        idempotencyKey: cleRefund(rec.id),
-      });
-      rec.reprise = {
-        ...rec.reprise,
-        statut: REPRISE_STATUT.CONFIRMEE,
-        eclats: Number(res.amount),
-        movementId: res.movement_id,
-        confirmedAt: now(),
-        erreur: null,
-      };
+      // 1. Retrait des euros de la Bourse.
+      if (!rec.debitFait) {
+        const debit = await journal.depenser({
+          appId: APP_ID,
+          montant: rec.centimes,
+          reason: 'Reprise en Éclats',
+          referenceType: 'reprise_euro',
+          referenceId: rec.id,
+          idempotencyKey: cleDebit(rec.id),
+        });
+        if (Number(debit.amount) < rec.centimes) throw new Error('Solde insuffisant');
+        rec.debitFait = true;
+        sauver();
+      }
+
+      // 2. Choix des conversions à défaire (les plus récentes d'abord), une
+      //    seule fois : rejouer ne doit pas changer la cible.
+      if (!rec.cibles) {
+        const cibles = [];
+        let somme = 0;
+        for (const c of conversionsActives()) {
+          if (somme >= rec.centimes) break;
+          cibles.push(c.id);
+          somme += c.centimes;
+        }
+        if (somme < rec.centimes) throw new Error('Conversions insuffisantes');
+        rec.cibles = cibles;
+        rec.somme = somme;
+        rec.reliquat = somme - rec.centimes;
+        rec.remboursees = [];
+        sauver();
+      }
+
+      // 3. Remboursement de chaque conversion visée, en entier.
+      for (const cid of rec.cibles) {
+        if (rec.remboursees.includes(cid)) continue;
+        await eclats.rembourser({
+          appId: APP_ID,
+          referenceType: 'conversion_euro',
+          referenceId: cid,
+          reason: 'Reprise : euros rendus en Éclats',
+          idempotencyKey: cleRefund(cid),
+        });
+        rec.remboursees.push(cid);
+        const c = conversion(cid);
+        if (c) c.repriseId = rec.id;
+        sauver();
+      }
+
+      // 4. Reconversion du reliquat : les euros conservés doivent rester
+      //    adossés à des Éclats réellement dépensés. Pas de crédit en Bourse —
+      //    ces euros n'en sont jamais sortis.
+      if (rec.reliquat > 0 && !rec.reconversionId) {
+        const id = uid();
+        const dep = await eclats.depenser({
+          appId: APP_ID,
+          montant: rec.reliquat,
+          reason: 'Reconversion du reliquat après reprise',
+          referenceType: 'conversion_euro',
+          referenceId: id,
+          idempotencyKey: cleSpend(id),
+        });
+        etat.conversions[id] = {
+          id,
+          eclatsDemandes: rec.reliquat,
+          eclats: Number(dep.amount),
+          centimes: centimesPour(Number(dep.amount)),
+          statut: CONVERSION_STATUT.CONFIRMEE,
+          createdAt: now(),
+          confirmedAt: now(),
+          movementId: dep.movement_id,
+          ajuste: false,
+          repriseId: null,
+          origine: 'reprise',
+          erreur: null,
+        };
+        rec.reconversionId = id;
+        sauver();
+      }
+
+      rec.statut = REPRISE_STATUT.CONFIRMEE;
+      rec.confirmedAt = now();
       sauver();
-      return { ok: true, conversionId: rec.id, eclats: rec.reprise.eclats, centimes: rec.centimes };
+      return { ok: true, repriseId: rec.id, centimes: rec.centimes, eclats: rec.centimes };
     } catch (e) {
-      rec.reprise = {
-        ...rec.reprise,
-        statut: REPRISE_STATUT.ERREUR,
-        erreur: e.message || String(e),
-      };
+      const message = e.message || String(e);
+      // Avant tout retrait, un échec ne laisse aucune trace à réparer.
+      if (!rec.debitFait) {
+        delete etat.reprises[rec.id];
+        sauver();
+        return { ok: false, reason: /insuffisant/i.test(message) ? 'solde_insuffisant' : 'reseau', message };
+      }
+      rec.statut = REPRISE_STATUT.ERREUR;
+      rec.erreur = message;
       sauver();
-      return {
-        ok: false, conversionId: rec.id, reason: 'reseau',
-        retryable: true, message: rec.reprise.erreur,
-      };
+      return { ok: false, repriseId: rec.id, reason: 'reseau', retryable: true, message };
     }
   }
 
-  async function rendre(conversionId) {
-    const rec = conversion(conversionId);
-    if (!rec) return { ok: false, reason: 'introuvable' };
-    if (!estConfirmee(rec)) return { ok: false, reason: 'non_comptabilisee' };
-    if (estReprise(rec)) {
-      return { ok: true, conversionId, eclats: rec.reprise.eclats, idempotentReplay: true };
+  /* Rend un montant libre, dans la limite du solde de la Bourse. */
+  async function rendre(centimes) {
+    const montant = Math.floor(centimes);
+    if (!Number.isFinite(montant) || montant <= 0) {
+      return { ok: false, reason: 'montant_invalide' };
     }
+    if (montant > maxRendable()) return { ok: false, reason: 'solde_insuffisant' };
     if (enVol) return { ok: false, reason: 'en_cours' };
-
-    // Reprise déjà entamée (euros retirés, Éclats pas encore rendus) : on
-    // repart de l'étape réseau sans re-débiter la Bourse.
-    if (rec.reprise) {
-      enVol = true;
-      try { return await envoyerReprise(rec); }
-      finally { enVol = false; }
-    }
-
-    if (rec.centimes > soldeCentimes()) {
-      return { ok: false, reason: 'euros_engages' };
-    }
 
     enVol = true;
     try {
-      const debit = await journal.depenser({
-        appId: APP_ID,
-        montant: rec.centimes,
-        reason: 'Reprise en Éclats',
-        referenceType: 'reprise_conversion',
-        referenceId: rec.id,
-        idempotencyKey: cleDebit(rec.id),
-      });
-      if (Number(debit.amount) < rec.centimes) {
-        return { ok: false, reason: 'euros_engages' };
-      }
-      rec.reprise = { statut: REPRISE_STATUT.EN_ATTENTE, createdAt: now() };
+      const id = uid();
+      etat.reprises[id] = {
+        id,
+        centimes: montant,
+        statut: REPRISE_STATUT.EN_COURS,
+        createdAt: now(),
+        debitFait: false,
+        cibles: null,
+        somme: 0,
+        reliquat: 0,
+        remboursees: [],
+        reconversionId: null,
+        erreur: null,
+      };
       sauver();
-      return await envoyerReprise(rec);
-    } catch (e) {
-      return { ok: false, reason: 'euros_engages', message: e.message || String(e) };
+      return await executer(etat.reprises[id]);
     } finally {
       enVol = false;
     }
   }
 
+  /* Rejoue une reprise interrompue. */
+  async function reprendreReprise(repriseId) {
+    const rec = reprise(repriseId);
+    if (!rec) return { ok: false, reason: 'introuvable' };
+    if (rec.statut === REPRISE_STATUT.CONFIRMEE) {
+      return { ok: true, repriseId, centimes: rec.centimes, idempotentReplay: true };
+    }
+    if (enVol) return { ok: false, reason: 'en_cours' };
+    enVol = true;
+    try { return await executer(rec); }
+    finally { enVol = false; }
+  }
+
+  /* Reprises inachevées, à rejouer (au démarrage notamment). */
+  function reprisesInachevees() {
+    return toutesReprises().filter((r) => r.statut !== REPRISE_STATUT.CONFIRMEE);
+  }
+
   return {
     CONVERSION_STATUT, REPRISE_STATUT, ECLATS_PAR_EURO,
-    soldeCentimes, conversion, toutesConversions, annulables, enSouffrance, totaux,
-    simuler, convertir, reprendre, rendre,
+    soldeCentimes, maxRendable,
+    conversion, toutesConversions, conversionsActives,
+    reprise, toutesReprises, reprisesInachevees,
+    enSouffrance, totaux, simuler,
+    convertir, reprendre, rendre, reprendreReprise,
     _etat: () => etat,
     _recharger: () => { etat = charger(); return etat; },
     /*
      * Restauration d'une sauvegarde : les DEUX journaux doivent être remplacés
      * ensemble. Les euros (journal) et les conversions qui les ont produits
      * forment un tout — restaurer l'un sans l'autre laisserait un solde sans
-     * origine, ou des conversions reprenables qui ne couvrent plus rien.
+     * origine, ou des euros reprenables qui ne sont plus adossés à rien.
      */
     _journalEtat: () => journal._etat(),
     _remplacer: ({ conversions, journal: mouvements }) => {
       etat = (conversions && typeof conversions.conversions === 'object')
-        ? conversions : { conversions: {} };
+        ? { conversions: conversions.conversions, reprises: conversions.reprises || {} }
+        : { conversions: {}, reprises: {} };
       sauver();
       journal._remplacer(mouvements);
     },

@@ -183,11 +183,34 @@ export function creerStore({
     return res;
   }
 
-  /* Rend une conversion : les euros non utilisés repartent en Éclats. */
-  async function rendreConversion(conversionId) {
-    const res = await bourse.rendre(conversionId);
+  /* Rend des euros de la Bourse sous forme d'Éclats (montant libre). */
+  async function rendreEnEclats(centimes) {
+    const res = await bourse.rendre(centimes);
     notify();
     return res;
+  }
+
+  async function reprendreReprise(repriseId) {
+    const res = await bourse.reprendreReprise(repriseId);
+    notify();
+    return res;
+  }
+
+  /*
+   * Une reprise interrompue laisse des euros retirés de la Bourse sans que les
+   * Éclats soient encore revenus. On la rejoue au démarrage : elle ne peut que
+   * se réparer vers le haut.
+   */
+  async function acheverReprises() {
+    const restantes = bourse.reprisesInachevees();
+    if (!restantes.length) return { acheves: 0 };
+    let acheves = 0;
+    for (const r of restantes) {
+      const res = await bourse.reprendreReprise(r.id);
+      if (res.ok) acheves += 1;
+    }
+    notify();
+    return { acheves, restantes: bourse.reprisesInachevees().length };
   }
 
   /* ---------- CRUD cagnottes ---------- */
@@ -528,7 +551,8 @@ export function creerStore({
     validerCagnotte, reactiverCagnotte,
     alimenter, retirer, annulerVersement, prochainRetrait,
     soldeDisponible, rafraichirSolde, totalEngage, totalRecompense,
-    convertirEclats, reprendreConversion, rendreConversion, basculerVersEuros,
+    convertirEclats, reprendreConversion, rendreEnEclats, reprendreReprise,
+    acheverReprises, basculerVersEuros,
     reordonner, resetOrdre,
     balanceSeries, estimation, stats,
     exportJSON, importJSON, resetAll,

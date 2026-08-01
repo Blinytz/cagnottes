@@ -16,7 +16,7 @@ Les cagnottes sont en **euros**. Les **Éclats** sont la monnaie de l'écosystè
 La **Bourse** est un intermédiaire volontaire : on y convertit des Éclats au fil de l'eau, puis on répartit dans les cagnottes. Verser ne parle donc jamais au réseau — seule la conversion le fait.
 
 - **Convertir** dépense réellement des Éclats du registre commun, plafonné au solde, confirmé par le serveur. Idempotent : un double clic ou un rejeu ne convertit jamais deux fois.
-- **Rendre** fait le chemin inverse : les euros non versés repartent en Éclats. Comme le registre ne sait que rembourser une dépense passée — la garantie qui empêche une application de fabriquer des Éclats — une reprise porte sur une **conversion entière**, et seulement tant que la Bourse détient encore la somme. D'où l'intérêt de convertir par petits montants.
+- **Rendre** fait le chemin inverse, pour **tout ou partie** du solde. Seule la Bourse est reprenable : ce qui est déjà versé dans une cagnotte ne l'est pas, il faut d'abord l'en sortir (annuler un versement, ou supprimer la cagnotte — ses euros reviennent alors à la Bourse). Le registre ne sachant rembourser qu'une dépense passée et en entier — la garantie qui empêche une application de fabriquer des Éclats —, rendre 20 € sur une conversion de 50 rembourse la conversion entière puis en reconvertit aussitôt le reliquat. Ce réancrage est interne : tu demandes juste un montant.
 - **Le solde n'est jamais stocké** : il est la somme d'un journal. De même, le montant d'une cagnotte n'est pas une valeur enregistrée mais la somme de ses versements non remboursés — d'où l'impossibilité structurelle d'une divergence entre l'affichage et la comptabilité.
 - **Le « − »** annule le dernier versement encore engagé, pour son montant exact ; chaque versement est aussi annulable depuis la liste des mouvements. Il n'y a pas de retrait d'un montant arbitraire : le journal rembourse par référence, en tout-ou-rien.
 - **Valider une cagnotte** n'écrit rien : les euros ont déjà quitté la Bourse au fil des versements ; la cagnotte cesse simplement d'être annulable.
@@ -25,7 +25,7 @@ Détail des règles et des garde-fous : [docs/INTEGRATION-ECLATS.md](docs/INTEGR
 
 ## Fonctionnalités
 
-- **Écran Change** : la Bourse, tes Éclats disponibles et leur équivalent en euros, la conversion avec aperçu en direct, les conversions reprenables, l'historique, et les opérations à confirmer.
+- **Écran Change** : la Bourse, tes Éclats disponibles et leur équivalent en euros, la conversion et la reprise (aperçu en direct et bouton « Tout » pour chacune), l'historique des échanges dans les deux sens, et les opérations à confirmer.
 - **Cagnottes** : image (emoji, URL ou photo uploadée), objectif, palier de versement rapide, montants libres avec note, description éditable, graphique de progression (7 j / 30 j / depuis le début), estimation « objectif atteint dans X jours ».
 - **Validation** : à 100 %, bouton « Valider » → popup de félicitations animée → archivage. Réactivation possible depuis les archives.
 - **Accueil** : tri automatique par % d'avancement, ou réordonnancement manuel par glissé-déposé (persistant).
@@ -43,7 +43,7 @@ node --test "tests/*.test.mjs"
 
 | Fichier | Couvre |
 |---|---|
-| `tests/bourse.test.mjs` | Conversion à parité fixe, plafonnement, reprise des euros non utilisés, impossibilité de créer des Éclats, panne réseau en cours de reprise |
+| `tests/bourse.test.mjs` | Conversion à parité fixe, plafonnement, reprise d'un montant libre, reconversion du reliquat, impossibilité de créer des Éclats, coupure réseau en cours de reprise |
 | `tests/eclats.test.mjs` | Journal des versements : plafonnement, double clic, rejeu réseau, remboursement exactement-une-fois |
 | `tests/eclats-local.test.mjs` | Équivalence du journal local avec la sémantique SQL du registre commun |
 
@@ -75,7 +75,7 @@ python -m http.server 4321
 | `js/utils.js` | Formatage euros/Éclats, dates, échappement HTML, UUID |
 | `js/main.js` | Point d'entrée : assemble Bourse, versements et Store. **Seul endroit qui décide d'où vient l'argent** |
 | `js/store.js` | Données métier des cagnottes, valeurs comptables dérivées du journal, stats, export/import |
-| `js/bourse.js` | Bourse en euros : conversion et reprise, parité fixe |
+| `js/bourse.js` | Bourse en euros : conversion, reprise d'un montant libre, parité fixe |
 | `js/eclats-local.js` | Journal local générique (clé paramétrable), au contrat du registre commun |
 | `js/eclats-registre.js` | Client du registre commun Supabase (clé publique uniquement) |
 | `js/eclats-cagnottes.js` | Journal des versements : source de vérité comptable |

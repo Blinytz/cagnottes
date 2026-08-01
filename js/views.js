@@ -300,25 +300,35 @@ const Views = (() => {
     const email = connecte ? (window.Registre.utilisateur()?.email || '') : '';
     const souffranceV = Store.eclats.enSouffrance();
     const souffranceC = Store.bourse.enSouffrance();
-    const rendables = Store.bourse.annulables();
-    const conversions = Store.bourse.toutesConversions()
-      .filter(c => c.statut === 'confirmee').slice(0, 8);
+    const rendable = Store.bourse.maxRendable();
     const tot = Store.bourse.totaux();
+
+    /* Journal unifié : conversions et reprises, du plus récent au plus ancien. */
+    const journal = [
+      ...Store.bourse.toutesConversions()
+        .filter(c => c.statut === 'confirmee' && c.origine !== 'reprise')
+        .map(c => ({ date: c.confirmedAt || c.createdAt, sens: 'entree',
+          centimes: c.centimes, eclats: c.eclats })),
+      ...Store.bourse.toutesReprises()
+        .filter(r => r.statut === 'confirmee')
+        .map(r => ({ date: r.confirmedAt || r.createdAt, sens: 'sortie',
+          centimes: r.centimes, eclats: r.centimes })),
+    ].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
 
     const rejeuHTML = (souffranceV.length || souffranceC.length) ? `
       <div class="panel">
         <h2>À confirmer</h2>
         <p class="hint">Ces opérations n'ont pas abouti : elles ne sont pas comptabilisées.</p>
         <ul class="mvt-list">
-          ${souffranceC.map(c => {
-            const enReprise = !!c.reprise;
+          ${souffranceC.map(o => {
+            const estReprise = o.centimes != null && o.debitFait !== undefined;
             return `<li class="mvt">
-              <span class="mvt-montant neg">${U.fmtEclats(enReprise ? c.eclats : c.eclatsDemandes)}</span>
-              <span class="mvt-info">${enReprise ? 'Reprise en Éclats' : 'Conversion en euros'}<br>
-                <span class="muted small">${U.esc((enReprise ? c.reprise.erreur : c.erreur) || 'En attente')}</span></span>
+              <span class="mvt-montant neg">${U.fmtEclats(estReprise ? o.centimes : o.eclatsDemandes)}</span>
+              <span class="mvt-info">${estReprise ? 'Reprise en Éclats' : 'Conversion en euros'}<br>
+                <span class="muted small">${U.esc(o.erreur || 'En attente')}</span></span>
               <button class="btn secondary small"
-                data-action="${enReprise ? 'rendre-conversion' : 'reprendre-conversion'}"
-                data-id="${c.id}">Réessayer</button>
+                data-action="${estReprise ? 'reprendre-reprise' : 'reprendre-conversion'}"
+                data-id="${o.id}">Réessayer</button>
             </li>`;
           }).join('')}
           ${souffranceV.map(v => {
@@ -334,44 +344,42 @@ const Views = (() => {
       </div>` : '';
 
     /*
-     * Rendre des euros = défaire une conversion entière. Le registre commun ne
-     * sait que rembourser une dépense passée — c'est ce qui garantit que
-     * Cagnottes ne puisse jamais fabriquer d'Éclats.
+     * Reprise d'un montant libre, plafonné au solde : ce qui est déjà versé
+     * dans une cagnotte n'est pas repris — il faut d'abord l'en sortir.
      */
-    const rendreHTML = (connecte && rendables.length) ? `
+    const rendreHTML = connecte ? `
       <div class="panel">
         <h2>Rendre des euros</h2>
-        <p class="hint">Les euros que tu n'as pas versés peuvent repartir en Éclats.
-          Une conversion se reprend entière : celles dont la somme est déjà engagée
-          dans une cagnotte n'apparaissent pas ici.</p>
-        <ul class="mvt-list">
-          ${rendables.map(c => `<li class="mvt">
-            <span class="mvt-montant neg">−${U.fmtEuros(c.centimes)}</span>
-            <span class="mvt-info">Rendrait ${U.fmtEclats(c.eclats)}<br>
-              <span class="muted small">converti le ${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
-            <button class="btn secondary small" data-action="rendre-conversion" data-id="${c.id}">Rendre</button>
-          </li>`).join('')}
-        </ul>
+        <p class="hint">Ce que tu n'as pas versé peut repartir en Éclats, en tout ou en
+          partie. Les euros déjà dans une cagnotte ne sont pas concernés : annule
+          d'abord un versement pour les libérer.</p>
+        ${rendable > 0 ? `
+        <form id="form-reprise" class="montant-libre" data-max="${rendable}">
+          <div class="field-row">
+            <input type="text" id="rep-montant" name="montant" inputmode="decimal"
+              placeholder="Combien d'euros ?" autocomplete="off" required>
+            <button type="button" class="btn secondary" data-action="rep-tout">Tout</button>
+          </div>
+          <div id="rep-apercu" class="conv-apercu muted">Disponible : ${U.fmtEuros(rendable)}.</div>
+          <button type="submit" class="btn primary wide">Rendre en Éclats</button>
+        </form>` : `<p class="muted">La Bourse est vide : rien à rendre.</p>`}
       </div>` : '';
 
-    const histoHTML = conversions.length ? `
+    const histoHTML = journal.length ? `
       <div class="panel">
-        <h2>Dernières conversions</h2>
+        <h2>Derniers échanges</h2>
         <ul class="mvt-list">
-          ${conversions.map(c => {
-            const rendue = c.reprise?.statut === 'confirmee';
-            return `<li class="mvt">
-              <span class="mvt-montant ${rendue ? 'neg' : 'pos'}">${rendue ? '−' : '+'}${U.fmtEuros(c.centimes)}</span>
-              <span class="mvt-info">${rendue
-                ? `${U.fmtEclats(c.eclats)} rendus au registre`
-                : `${U.fmtEclats(c.eclats)} convertis`}<br>
-                <span class="muted small">${U.fmtDateTime(c.confirmedAt || c.createdAt)}</span></span>
-            </li>`;
-          }).join('')}
+          ${journal.map(m => `<li class="mvt">
+            <span class="mvt-montant ${m.sens === 'entree' ? 'pos' : 'neg'}">${m.sens === 'entree' ? '+' : '−'}${U.fmtEuros(m.centimes)}</span>
+            <span class="mvt-info">${m.sens === 'entree'
+              ? `${U.fmtEclats(m.eclats)} convertis`
+              : `${U.fmtEclats(m.eclats)} rendus au registre`}<br>
+              <span class="muted small">${U.fmtDateTime(m.date)}</span></span>
+          </li>`).join('')}
         </ul>
-        <p class="hint">${tot.nb} ${U.plural(tot.nb, 'conversion')} en cours ·
-          ${U.fmtEclats(tot.eclats)} transformés en ${U.fmtEuros(tot.centimes)}${tot.nbReprises
-            ? ` · ${U.fmtEclats(tot.eclatsRendus)} rendus` : ''}.</p>
+        <p class="hint">${U.fmtEuros(tot.centimes)} actuellement adossés à
+          ${U.fmtEclats(tot.eclats)}${tot.nbReprises
+            ? ` · ${U.fmtEclats(tot.eclatsRendus)} rendus au total` : ''}.</p>
       </div>` : '';
 
     const conversionHTML = connecte ? `
@@ -472,6 +480,27 @@ const Views = (() => {
     const sim = Store.bourse.simuler(n);
     apercu.className = 'conv-apercu actif';
     apercu.innerHTML = `${U.fmtEclats(sim.eclats)} → <strong>${U.fmtEuros(sim.centimes)}</strong>`;
+  }
+
+  /* Aperçu en direct de la reprise pendant la saisie. */
+  function majApercuReprise() {
+    const champ = document.getElementById('rep-montant');
+    const apercu = document.getElementById('rep-apercu');
+    if (!champ || !apercu) return;
+    const max = Number(champ.form?.dataset.max || 0);
+    const n = U.parseEuros(champ.value);
+    if (!Number.isFinite(n) || n <= 0) {
+      apercu.className = 'conv-apercu muted';
+      apercu.textContent = `Disponible : ${U.fmtEuros(max)}.`;
+      return;
+    }
+    if (n > max) {
+      apercu.className = 'conv-apercu muted';
+      apercu.innerHTML = `Trop élevé : la Bourse ne contient que <strong>${U.fmtEuros(max)}</strong>.`;
+      return;
+    }
+    apercu.className = 'conv-apercu actif';
+    apercu.innerHTML = `<strong>${U.fmtEuros(n)}</strong> → ${U.fmtEclats(n)}`;
   }
   /* ---------- Écran 6 : Réglages ---------- */
 
@@ -779,7 +808,7 @@ const Views = (() => {
 
   return {
     viewHome, viewCagnotte, viewStats, viewArchives, viewChange, viewReglages,
-    majApercuConversion, chargerEclatsDispo,
+    majApercuConversion, majApercuReprise, chargerEclatsDispo,
     openModal, closeModal, confirmDialog, cagnotteFormModal, celebrate,
     afterRender, ranges
   };

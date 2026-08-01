@@ -178,29 +178,24 @@ const App = (() => {
         break;
       }
 
-      case 'rendre-conversion': {
-        const c = Store.bourse.conversion(id);
-        if (!c) return;
-        /* Une reprise déjà entamée se rejoue sans nouvelle confirmation :
-           les euros ont quitté la Bourse, seuls les Éclats manquent encore. */
-        if (!c.reprise) {
-          const ok = await Views.confirmDialog(
-            `Rendre <strong>${U.fmtEuros(c.centimes)}</strong> sous forme de
-             <strong>${U.fmtEclats(c.eclats)}</strong> ?<br>
-             <span class="muted small">Ces euros quitteront la Bourse et retourneront
-             au registre commun.</span>`,
-            { okLabel: 'Rendre' });
-          if (!ok) return;
-        }
-        const res = await Store.rendreConversion(id);
+      case 'rep-tout': {
+        const champ = document.getElementById('rep-montant');
+        if (!champ) return;
+        const max = Number(champ.form.dataset.max || 0);
+        if (!max) return toast('La Bourse est vide.', 'error');
+        champ.value = (max / 100).toFixed(2).replace('.', ',');
+        Views.majApercuReprise();
+        break;
+      }
+
+      /* Reprise interrompue : les euros ont déjà quitté la Bourse, seuls les
+         Éclats manquent — on rejoue sans redemander confirmation. */
+      case 'reprendre-reprise': {
+        const res = await Store.reprendreReprise(id);
         await majSoldeEclats(true);
         render();
-        if (res.ok) toast(`✦ ${U.fmtEclats(res.eclats)} rendus au registre commun.`, 'success');
-        else if (res.reason === 'euros_engages') {
-          toast('Ces euros sont déjà engagés dans une cagnotte. Annule d’abord un versement.', 'error');
-        } else {
-          toast('📡 Registre injoignable : les Éclats ne sont pas encore rendus. Réessaie depuis « À confirmer ».', 'error');
-        }
+        if (res.ok) toast(`✦ ${U.fmtEclats(res.centimes)} rendus au registre commun.`, 'success');
+        else toast('📡 Registre injoignable : les Éclats ne sont pas encore rendus.', 'error');
         break;
       }
 
@@ -444,6 +439,38 @@ const App = (() => {
       return;
     }
 
+    /* Reprise : des euros de la Bourse repartent en Éclats */
+    if (form.id === 'form-reprise') {
+      e.preventDefault();
+      const champ = document.getElementById('rep-montant');
+      const centimes = U.parseEuros(champ.value);
+      const max = Number(form.dataset.max || 0);
+      if (!Number.isFinite(centimes) || centimes <= 0) {
+        return toast('Indique un montant en euros à rendre.', 'error');
+      }
+      if (centimes > max) {
+        return toast(`La Bourse ne contient que ${U.fmtEuros(max)}.`, 'error');
+      }
+      const ok = await Views.confirmDialog(
+        `Rendre <strong>${U.fmtEuros(centimes)}</strong> sous forme de
+         <strong>${U.fmtEclats(centimes)}</strong> ?<br>
+         <span class="muted small">Ces euros quitteront la Bourse et retourneront
+         au registre commun.</span>`,
+        { okLabel: 'Rendre' });
+      if (!ok) return;
+      const res = await Store.rendreEnEclats(centimes);
+      await majSoldeEclats(true);
+      render();
+      if (res.ok) {
+        toast(`✦ ${U.fmtEclats(res.centimes)} rendus au registre commun.`, 'success');
+      } else if (res.reason === 'solde_insuffisant') {
+        toast('La Bourse ne contient pas cette somme.', 'error');
+      } else {
+        toast('📡 Registre injoignable : les Éclats ne sont pas encore rendus. Réessaie depuis « À confirmer ».', 'error');
+      }
+      return;
+    }
+
     /* Création / édition de cagnotte */
     if (form.id === 'form-cagnotte') {
       e.preventDefault();
@@ -487,9 +514,10 @@ const App = (() => {
     }
   });
 
-  /* Aperçu en direct de la conversion pendant la saisie */
+  /* Aperçus en direct pendant la saisie */
   document.addEventListener('input', e => {
     if (e.target.id === 'conv-montant') Views.majApercuConversion();
+    if (e.target.id === 'rep-montant') Views.majApercuReprise();
   });
 
   /* Sauvegarde de la description à la volée (au blur) */
@@ -526,6 +554,20 @@ const App = (() => {
 
     await Store.rafraichirSolde();
     render();
+
+    /*
+     * Une reprise interrompue a retiré des euros de la Bourse sans que les
+     * Éclats soient revenus. On la termine dès que possible : elle ne peut que
+     * se réparer vers le haut, et l'utilisateur n'a rien à faire.
+     */
+    if (Store.bourse.reprisesInachevees().length) {
+      const res = await Store.acheverReprises();
+      if (res.acheves) {
+        await majSoldeEclats(true);
+        render();
+        toast(`✦ Reprise en attente terminée : ${U.plural(res.acheves, 'Éclat rendu', 'Éclats rendus')}.`, 'success');
+      }
+    }
 
     /* Service worker (PWA hors-ligne) */
     if ('serviceWorker' in navigator) {

@@ -27,7 +27,7 @@ reste parlante là où « 60 000 ✦ » ne l'était pas.
 | `js/eclats-registre.js` | Client du registre commun (Supabase), pour les conversions. |
 | `js/bascule-euros.js` | Passage v2 (Éclats) → v3 (euros), fonctions pures. |
 | `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient l'argent.** |
-| `tests/` | 38 tests (`node --test "tests/*.test.mjs"`). |
+| `tests/` | 42 tests (`node --test "tests/*.test.mjs"`). |
 
 ## Règles d'une conversion
 
@@ -38,24 +38,42 @@ reste parlante là où « 60 000 ✦ » ne l'était pas.
 - Elle est **idempotente** : double clic, rejeu ou rechargement ne convertissent
   jamais deux fois.
 
-## Rendre des euros = défaire une conversion
+## Rendre des euros : tout ou partie du solde
+
+**Seule la Bourse est reprenable.** Ce qui est déjà versé dans une cagnotte ne
+l'est pas : il faut d'abord l'en sortir — annuler un versement, ou supprimer la
+cagnotte, ce qui rend automatiquement ses euros à la Bourse. Le montant
+demandé est donc plafonné au solde disponible, et à lui seul.
+
+Dans cette limite, **le montant est libre** : on rend 20 € sur 50, ou tout.
+
+### Pourquoi ce n'est pas trivial
 
 Le registre commun ne sait pas créditer des Éclats, seulement **rembourser une
-dépense passée** (`eclats_refund`). C'est une garantie, pas une gêne : elle rend
+dépense passée**, et **en entier** (`eclats_refund`). C'est la garantie qui rend
 structurellement impossible qu'une application fabrique des Éclats.
 
-Une reprise porte donc sur une **conversion entière**, et seulement tant que la
-Bourse détient encore la somme correspondante — le reste étant engagé dans des
-cagnottes. Pour libérer une conversion, il faut d'abord annuler un versement.
-D'où le conseil affiché à l'écran : convertir au fil de l'eau, en petits
-montants, qui se reprennent plus facilement.
+Pour rendre 20 € alors que la seule conversion passée en valait 50, la Bourse
+rembourse donc la conversion entière (+5 000 ✦) puis **reconvertit aussitôt le
+reliquat** (−3 000 ✦). Net : 2 000 ✦ rendus, 30 € conservés. Ce réancrage est
+interne — l'utilisateur demande simplement un montant.
 
-L'ordre des opérations est délibéré : les euros quittent d'abord la Bourse
-(local, sûr), puis les Éclats sont rendus au registre (réseau, faillible). Si le
-réseau lâche entre les deux, les euros sont « en transit », l'opération est
-signalée dans **À confirmer** et rejouable — le remboursement étant idempotent,
-rejouer ne rend jamais deux fois. L'ordre inverse aurait pu faire coexister les
-euros **et** les Éclats : de la valeur créée à partir de rien.
+Invariant maintenu à chaque étape :
+
+```
+solde de la Bourse = Σ(conversions actives) − Σ(engagé en cagnottes)
+```
+
+### Ordre des opérations
+
+Délibéré : les euros quittent la Bourse **en premier** (local, sûr), avant tout
+échange avec le registre. Toute interruption laisse donc l'utilisateur avec
+moins que son dû — jamais avec plus, ce qui reviendrait à créer de la valeur.
+
+Chaque étape est idempotente et note son avancement : rejouer ne refait que ce
+qui manque. Une reprise inachevée est signalée dans **À confirmer**, et
+**terminée automatiquement au démarrage** de l'application — elle ne peut que
+se réparer vers le haut.
 
 ## La bascule vers les euros
 
@@ -76,8 +94,8 @@ vides. La Bourse démarre à 0 € : c'est à toi de convertir.
 - Le bandeau haut affiche les deux monnaies, jamais confondues : les **Éclats**
   du registre commun à gauche, la **Bourse en euros** à droite.
 - L'onglet **Change** montre la Bourse, tes Éclats disponibles et leur équivalent,
-  le champ de conversion avec aperçu en direct, la liste des conversions
-  reprenables, et l'historique.
+  le champ de conversion et celui de reprise (tous deux avec aperçu en direct et
+  bouton « Tout »), et l'historique des échanges dans les deux sens.
 - Verser dans une cagnotte puise dans la **Bourse** : aucune dépendance au réseau
   pour l'usage quotidien.
 - Le « − » annule le dernier versement encore engagé, pour son montant exact.

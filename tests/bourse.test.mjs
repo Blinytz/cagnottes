@@ -1,9 +1,10 @@
-// Tests de la Bourse : conversion Éclats ↔ euros au taux fixe 100 ✦ = 1 €,
-// plafonnement, idempotence, et reprise des euros non utilisés.
+// Tests de la Bourse : conversion Éclats ↔ euros à la parité fixe 100 ✦ = 1 €,
+// plafonnement, idempotence, et reprise d'un montant libre.
 //
 // Ce que ces tests protègent avant tout : Cagnottes ne doit JAMAIS pouvoir
-// fabriquer des Éclats. Toute reprise passe par le remboursement d'une dépense
-// réellement enregistrée, et rien ne peut être rendu deux fois.
+// fabriquer des Éclats. Toute reprise passe par le remboursement de dépenses
+// réellement enregistrées, et seul le solde de la Bourse est reprenable —
+// ce qui est déjà versé dans une cagnotte ne l'est pas.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -45,6 +46,15 @@ async function engager(journal, centimes, ref = 'v1') {
     appId: 'cagnottes', montant: centimes, reason: 'Versement',
     referenceType: 'cagnotte_versement', referenceId: ref,
     idempotencyKey: `cagnottes:versement:${ref}`,
+  });
+}
+
+/* Libère des euros engagés, comme la suppression d'une cagnotte. */
+async function liberer(journal, ref = 'v1') {
+  return journal.rembourser({
+    appId: 'cagnottes', referenceType: 'cagnotte_versement', referenceId: ref,
+    reason: 'Suppression de la cagnotte',
+    idempotencyKey: `cagnottes:remboursement:${ref}`,
   });
 }
 
@@ -123,129 +133,167 @@ test('reprendre une conversion déjà confirmée ne recrédite rien', async () =
   assert.equal(bourse.soldeCentimes(), 250);
 });
 
-// ---- Rendre des euros sous forme d'Éclats ----
+// ---- Rendre des euros sous forme d'Éclats (montant libre) ----
 
-test('rendre : les euros quittent la Bourse, les Éclats reviennent', async () => {
+test('rendre tout : retour exact au point de départ', async () => {
   const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
-  const c = await bourse.convertir(400);
+  await bourse.convertir(400);
   assert.equal(await registre.solde(), 600);
 
-  const r = await bourse.rendre(c.conversionId);
+  const r = await bourse.rendre(400);
   assert.equal(r.ok, true);
-  assert.equal(r.eclats, 400);
+  assert.equal(r.centimes, 400);
   assert.equal(bourse.soldeCentimes(), 0);
-  assert.equal(await registre.solde(), 1000, 'retour exact au point de départ');
+  assert.equal(await registre.solde(), 1000);
 });
 
-test('AUCUNE CRÉATION : rendre deux fois ne rend les Éclats qu’une fois', async () => {
+test('RENDRE UNE PARTIE : le reliquat est reconverti, rien ne se perd', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);                 // une seule conversion de 50,00 €
+  assert.equal(bourse.soldeCentimes(), 5000);
+
+  const r = await bourse.rendre(2000);          // on ne rend que 20,00 €
+  assert.equal(r.ok, true);
+  assert.equal(r.centimes, 2000);
+  assert.equal(await registre.solde(), 2000, '2 000 ✦ rendus, pas 5 000');
+  assert.equal(bourse.soldeCentimes(), 3000, '30,00 € conservés');
+
+  // Les euros conservés restent adossés à des Éclats réellement dépensés.
+  assert.equal(bourse.totaux().centimes, 3000);
+  assert.equal(bourse.totaux().eclats, 3000);
+});
+
+test('rendre par petits bouts successifs reste exact', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
+  for (const part of [700, 300, 1000]) {
+    const r = await bourse.rendre(part);
+    assert.equal(r.ok, true, `reprise de ${part} refusée`);
+  }
+  assert.equal(await registre.solde(), 2000);
+  assert.equal(bourse.soldeCentimes(), 3000);
+  assert.equal(bourse.totaux().centimes, 3000, 'adossement toujours cohérent');
+});
+
+test('une reprise peut traverser plusieurs conversions', async () => {
   const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
-  const c = await bourse.convertir(400);
-  const a = await bourse.rendre(c.conversionId);
-  const b = await bourse.rendre(c.conversionId);
-  assert.equal(a.ok, true);
-  assert.equal(b.ok, true);
-  assert.equal(b.idempotentReplay, true);
-  assert.equal(await registre.solde(), 1000, 'crédité une seule fois');
-  assert.equal(bourse.soldeCentimes(), 0, 'débité une seule fois');
+  await bourse.convertir(300);
+  await bourse.convertir(300);
+  await bourse.convertir(300);                  // 9,00 € en trois fois
+  const r = await bourse.rendre(700);           // dépasse deux conversions
+  assert.equal(r.ok, true);
+  assert.equal(await registre.solde(), 800);    // 100 restants + 700 rendus
+  assert.equal(bourse.soldeCentimes(), 200);
+  assert.equal(bourse.totaux().centimes, 200);
 });
 
-test('des euros engagés dans une cagnotte ne peuvent pas être rendus', async () => {
-  const { bourse, journal, registre } = fabrique({ eclatsDispo: 1000 });
-  const c = await bourse.convertir(500);
-  await engager(journal, 300);                 // 3,00 € partis en cagnotte
+test('SEULE LA BOURSE est reprenable : l’engagé en cagnotte ne l’est pas', async () => {
+  const { bourse, journal, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
+  await engager(journal, 3000);                 // 30,00 € partis en cagnotte
+  assert.equal(bourse.maxRendable(), 2000);
 
-  const r = await bourse.rendre(c.conversionId);
+  const trop = await bourse.rendre(2500);
+  assert.equal(trop.ok, false);
+  assert.equal(trop.reason, 'solde_insuffisant');
+  assert.equal(bourse.soldeCentimes(), 2000, 'rien n’a bougé');
+  assert.equal(await registre.solde(), 0);
+
+  // Ce qui reste dans la Bourse, lui, est bien reprenable.
+  const ok = await bourse.rendre(2000);
+  assert.equal(ok.ok, true);
+  assert.equal(await registre.solde(), 2000);
+  assert.equal(bourse.soldeCentimes(), 0);
+});
+
+test('après libération des euros d’une cagnotte, ils redeviennent reprenables', async () => {
+  const { bourse, journal, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
+  await engager(journal, 3000);
+  assert.equal(bourse.maxRendable(), 2000);
+
+  await liberer(journal);                       // suppression de la cagnotte
+  assert.equal(bourse.maxRendable(), 5000);
+  const r = await bourse.rendre(5000);
+  assert.equal(r.ok, true);
+  assert.equal(await registre.solde(), 5000);
+});
+
+test('AUCUNE CRÉATION : un montant supérieur au solde est refusé', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
+  await bourse.convertir(400);
+  const r = await bourse.rendre(900);
   assert.equal(r.ok, false);
-  assert.equal(r.reason, 'euros_engages');
-  assert.equal(bourse.soldeCentimes(), 200, 'la Bourse est intacte');
-  assert.equal(await registre.solde(), 500, 'aucun Éclat rendu');
+  assert.equal(r.reason, 'solde_insuffisant');
+  assert.equal(await registre.solde(), 600, 'aucun Éclat créé');
+  assert.equal(bourse.soldeCentimes(), 400);
 });
 
-test('la liste des reprises possibles exclut ce qui est déjà engagé', async () => {
-  const { bourse, journal } = fabrique({ eclatsDispo: 1000 });
-  const petite = await bourse.convertir(100);
-  const grosse = await bourse.convertir(400);
-  assert.equal(bourse.annulables().length, 2);
-
-  await engager(journal, 450);                 // il ne reste que 0,50 €
-  const restants = bourse.annulables().map((c) => c.id);
-  assert.deepEqual(restants, [], 'aucune conversion n’est plus couverte');
-
-  // Après annulation du versement, tout redevient reprenable.
-  await journal.rembourser({
-    appId: 'cagnottes', referenceType: 'cagnotte_versement', referenceId: 'v1',
-    reason: 'Annulation', idempotencyKey: 'cagnottes:remboursement:v1',
-  });
-  const apres = bourse.annulables().map((c) => c.id).sort();
-  assert.deepEqual(apres, [petite.conversionId, grosse.conversionId].sort());
-});
-
-test('panne réseau pendant une reprise : euros retirés, rejouable, rien de perdu', async () => {
-  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
-  const c = await bourse.convertir(400);
+test('panne réseau pendant une reprise : rejouable, rien de perdu ni de créé', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
 
   const vraie = registre.rembourser;
   registre.rembourser = async () => { throw new Error('Échec réseau'); };
-  const r1 = await bourse.rendre(c.conversionId);
+  const r1 = await bourse.rendre(2000);
   assert.equal(r1.ok, false);
   assert.equal(r1.reason, 'reseau');
-  assert.equal(bourse.soldeCentimes(), 0, 'les euros ont quitté la Bourse');
-  assert.equal(await registre.solde(), 600, 'les Éclats ne sont pas encore rendus');
-  assert.equal(bourse.enSouffrance().length, 1, 'l’opération est signalée');
+  assert.equal(bourse.soldeCentimes(), 3000, 'les euros ont quitté la Bourse');
+  assert.equal(await registre.solde(), 0, 'les Éclats ne sont pas encore rendus');
+  assert.equal(bourse.reprisesInachevees().length, 1, 'signalée pour rejeu');
 
-  // Le réseau revient : la reprise aboutit sans re-débiter la Bourse.
   registre.rembourser = vraie;
-  const r2 = await bourse.rendre(c.conversionId);
+  const r2 = await bourse.reprendreReprise(r1.repriseId);
   assert.equal(r2.ok, true);
-  assert.equal(bourse.soldeCentimes(), 0);
-  assert.equal(await registre.solde(), 1000);
-  assert.equal(bourse.enSouffrance().length, 0);
+  assert.equal(await registre.solde(), 2000);
+  assert.equal(bourse.soldeCentimes(), 3000);
+  assert.equal(bourse.reprisesInachevees().length, 0);
 });
 
-test('une conversion non confirmée ne peut pas être rendue', async () => {
-  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
-  registre.depenser = async () => { throw new Error('Échec réseau'); };
-  const c = await bourse.convertir(300);
-  assert.equal(c.ok, false);
+test('coupure APRÈS remboursement : le rejeu reconvertit le reliquat', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
 
-  const r = await bourse.rendre(c.conversionId);
-  assert.equal(r.ok, false);
-  assert.equal(r.reason, 'non_comptabilisee');
-});
-
-test('les totaux ne comptent que les conversions confirmées et non rendues', async () => {
-  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
-  const gardee = await bourse.convertir(200);
-  const rendue = await bourse.convertir(300);
-  await bourse.rendre(rendue.conversionId);
-
+  // Le remboursement passe, la reconversion du reliquat échoue.
   const vraie = registre.depenser;
-  registre.depenser = async () => { throw new Error('Échec réseau'); };
-  await bourse.convertir(100);
-  registre.depenser = vraie;
+  let coupe = true;
+  registre.depenser = async (args) => {
+    if (coupe) throw new Error('Échec réseau');
+    return vraie(args);
+  };
+  const r1 = await bourse.rendre(2000);
+  assert.equal(r1.ok, false);
+  assert.equal(await registre.solde(), 5000, 'tout est revenu, trop pour l’instant');
+  assert.equal(bourse.soldeCentimes(), 3000);
 
-  const t = bourse.totaux();
-  assert.equal(t.nb, 1);
-  assert.equal(t.eclats, 200);
-  assert.equal(t.centimes, 200);
-  assert.equal(t.nbReprises, 1);
-  assert.equal(t.eclatsRendus, 300);
-  assert.equal(bourse.enSouffrance().length, 1);
-  assert.equal(bourse.conversion(gardee.conversionId).statut, CONVERSION_STATUT.CONFIRMEE);
-  assert.equal(bourse.conversion(rendue.conversionId).reprise.statut, REPRISE_STATUT.CONFIRMEE);
+  coupe = false;
+  const r2 = await bourse.reprendreReprise(r1.repriseId);
+  assert.equal(r2.ok, true);
+  assert.equal(await registre.solde(), 2000, 'le reliquat est bien redépensé');
+  assert.equal(bourse.soldeCentimes(), 3000);
+  assert.equal(bourse.totaux().centimes, 3000);
+});
+
+test('rejouer une reprise confirmée ne rend rien de plus', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
+  await bourse.convertir(400);
+  const r = await bourse.rendre(400);
+  const encore = await bourse.reprendreReprise(r.repriseId);
+  assert.equal(encore.ok, true);
+  assert.equal(encore.idempotentReplay, true);
+  assert.equal(await registre.solde(), 1000, 'crédité une seule fois');
 });
 
 test('conversions et reprises survivent au rechargement', async () => {
-  const { bourse, storage, journal, registre, uid } = fabrique({ eclatsDispo: 1000 });
-  const a = await bourse.convertir(300);
-  const b = await bourse.convertir(200);
-  await bourse.rendre(b.conversionId);
+  const { bourse, storage, journal, registre, uid } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(5000);
+  const r = await bourse.rendre(2000);
 
   const rouverte = createBourse({ journal, eclats: registre, storage, uid });
-  assert.equal(rouverte.soldeCentimes(), 300);
-  assert.equal(rouverte.conversion(a.conversionId).statut, CONVERSION_STATUT.CONFIRMEE);
-  assert.equal(rouverte.conversion(b.conversionId).reprise.statut, REPRISE_STATUT.CONFIRMEE);
-  assert.equal(rouverte.totaux().eclats, 300);
+  assert.equal(rouverte.soldeCentimes(), 3000);
+  assert.equal(rouverte.reprise(r.repriseId).statut, REPRISE_STATUT.CONFIRMEE);
+  assert.equal(rouverte.totaux().centimes, 3000);
+  assert.equal(rouverte.totaux().eclatsRendus, 2000);
   assert.ok(storage.getItem(CONVERSIONS_KEY));
 });
 
@@ -257,20 +305,33 @@ test('simuler n’engage rien', async () => {
   assert.equal(bourse.soldeCentimes(), 0);
 });
 
+test('les conversions en erreur restent signalées, sans compter', async () => {
+  const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
+  await bourse.convertir(200);
+  registre.depenser = async () => { throw new Error('Échec réseau'); };
+  const rate = await bourse.convertir(300);
+  assert.equal(rate.ok, false);
+  assert.equal(bourse.totaux().nb, 1);
+  assert.equal(bourse.totaux().centimes, 200);
+  assert.equal(bourse.enSouffrance().length, 1);
+  assert.equal(bourse.conversion(rate.conversionId).statut, CONVERSION_STATUT.ERREUR);
+});
+
 test('restaurer une sauvegarde remplace les DEUX journaux ensemble', async () => {
-  const { bourse, journal } = fabrique({ eclatsDispo: 1000 });
-  await bourse.convertir(700);
-  await engager(journal, 200);
+  const { bourse, journal } = fabrique({ eclatsDispo: 5000 });
+  await bourse.convertir(4000);
+  await engager(journal, 1000);
+  await bourse.rendre(500);
   const sauvegarde = {
     conversions: JSON.parse(JSON.stringify(bourse._etat())),
     journal: JSON.parse(JSON.stringify(bourse._journalEtat())),
   };
-  const soldeAttendu = bourse.soldeCentimes();
+  const attendu = bourse.soldeCentimes();
 
-  await bourse.convertir(100);                 // état divergent
-  assert.notEqual(bourse.soldeCentimes(), soldeAttendu);
+  await bourse.convertir(100);
+  assert.notEqual(bourse.soldeCentimes(), attendu);
 
   bourse._remplacer(sauvegarde);
-  assert.equal(bourse.soldeCentimes(), soldeAttendu, 'solde restauré');
-  assert.equal(bourse.totaux().nb, 1, 'journal des conversions restauré');
+  assert.equal(bourse.soldeCentimes(), attendu, 'solde restauré');
+  assert.equal(bourse.totaux().eclatsRendus, 500, 'reprises restaurées');
 });
