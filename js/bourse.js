@@ -117,8 +117,21 @@ export function createBourse({
     return journal._etat().mouvements.reduce((s, m) => s + m.amount, 0);
   }
 
-  /* Tout le solde disponible est reprenable — et rien de plus. */
-  function maxRendable() { return Math.max(0, soldeCentimes()); }
+  /*
+   * Ce qui peut repartir en Éclats, en centimes.
+   *
+   * Normalement le solde entier : à parité 1 ✦ = 1 centime, chaque euro est
+   * adossé à un Éclat. Mais les conversions faites AVANT la parité fixe, à un
+   * taux ≠ 1,00, ont dépensé un nombre d'Éclats différent des euros reçus. Un
+   * remboursement rend les Éclats réellement dépensés — pas l'équivalent des
+   * euros rendus. Sans ce plafond, rendre 6 € issus d'une conversion à 0,60
+   * rapporterait 1 000 ✦ au lieu de 600 : des Éclats créés à partir de rien.
+   */
+  function maxRendable() {
+    const solde = Math.max(0, soldeCentimes());
+    const adosses = conversionsActives().reduce((s, c) => s + c.eclats, 0);
+    return Math.min(solde, adosses);
+  }
 
   function conversion(id) { return etat.conversions[id] || null; }
   function toutesConversions() {
@@ -300,20 +313,35 @@ export function createBourse({
         sauver();
       }
 
-      // 2. Choix des conversions à défaire (les plus récentes d'abord), une
-      //    seule fois : rejouer ne doit pas changer la cible.
+      /*
+       * 2. Choix des conversions à défaire (les plus récentes d'abord), une
+       *    seule fois : rejouer ne doit pas changer la cible.
+       *
+       *    On suit DEUX cumuls, car ils divergent sur les conversions
+       *    antérieures à la parité fixe : les euros qu'elles ont crédités
+       *    (`centimes`) et les Éclats qu'elles ont réellement dépensés
+       *    (`eclats`). Il faut assez des deux — assez d'euros à retirer de la
+       *    Bourse, et assez d'Éclats à récupérer pour en rendre le montant
+       *    demandé sans en fabriquer.
+       */
       if (!rec.cibles) {
         const cibles = [];
-        let somme = 0;
+        let sommeCentimes = 0;
+        let sommeEclats = 0;
         for (const c of conversionsActives()) {
-          if (somme >= rec.centimes) break;
+          if (sommeCentimes >= rec.centimes && sommeEclats >= rec.centimes) break;
           cibles.push(c.id);
-          somme += c.centimes;
+          sommeCentimes += c.centimes;
+          sommeEclats += c.eclats;
         }
-        if (somme < rec.centimes) throw new Error('Conversions insuffisantes');
+        if (sommeCentimes < rec.centimes || sommeEclats < rec.centimes) {
+          throw new Error('Conversions insuffisantes');
+        }
         rec.cibles = cibles;
-        rec.somme = somme;
-        rec.reliquat = somme - rec.centimes;
+        rec.sommeCentimes = sommeCentimes;
+        rec.sommeEclats = sommeEclats;
+        rec.reliquatCentimes = sommeCentimes - rec.centimes;
+        rec.reliquatEclats = sommeEclats - rec.centimes;
         rec.remboursees = [];
         sauver();
       }
@@ -334,28 +362,43 @@ export function createBourse({
         sauver();
       }
 
-      // 4. Reconversion du reliquat : les euros conservés doivent rester
-      //    adossés à des Éclats réellement dépensés. Pas de crédit en Bourse —
-      //    ces euros n'en sont jamais sortis.
-      if (rec.reliquat > 0 && !rec.reconversionId) {
+      /*
+       * 4. Reconversion du reliquat : les euros conservés doivent rester
+       *    adossés à des Éclats réellement dépensés. Pas de crédit en Bourse —
+       *    ces euros n'en sont jamais sortis.
+       *
+       *    Le reliquat en Éclats peut être nul alors qu'il reste des euros
+       *    (conversion passée à un taux > 1,00) : ces euros-là ne sont adossés
+       *    à rien et ne pourront plus repartir en Éclats. On les enregistre
+       *    quand même, sans quoi le solde ne se retrouverait plus dans le
+       *    total des conversions actives.
+       */
+      const resteAAncrer = rec.reliquatCentimes > 0 || rec.reliquatEclats > 0;
+      if (resteAAncrer && !rec.reconversionId) {
         const id = uid();
-        const dep = await eclats.depenser({
-          appId: APP_ID,
-          montant: rec.reliquat,
-          reason: 'Reconversion du reliquat après reprise',
-          referenceType: 'conversion_euro',
-          referenceId: id,
-          idempotencyKey: cleSpend(id),
-        });
+        let eclatsDepenses = 0;
+        let movementId = null;
+        if (rec.reliquatEclats > 0) {
+          const dep = await eclats.depenser({
+            appId: APP_ID,
+            montant: rec.reliquatEclats,
+            reason: 'Reconversion du reliquat après reprise',
+            referenceType: 'conversion_euro',
+            referenceId: id,
+            idempotencyKey: cleSpend(id),
+          });
+          eclatsDepenses = Number(dep.amount);
+          movementId = dep.movement_id;
+        }
         etat.conversions[id] = {
           id,
-          eclatsDemandes: rec.reliquat,
-          eclats: Number(dep.amount),
-          centimes: centimesPour(Number(dep.amount)),
+          eclatsDemandes: rec.reliquatEclats,
+          eclats: eclatsDepenses,
+          centimes: rec.reliquatCentimes,
           statut: CONVERSION_STATUT.CONFIRMEE,
           createdAt: now(),
           confirmedAt: now(),
-          movementId: dep.movement_id,
+          movementId,
           ajuste: false,
           repriseId: null,
           origine: 'reprise',
@@ -403,8 +446,10 @@ export function createBourse({
         createdAt: now(),
         debitFait: false,
         cibles: null,
-        somme: 0,
-        reliquat: 0,
+        sommeCentimes: 0,
+        sommeEclats: 0,
+        reliquatCentimes: 0,
+        reliquatEclats: 0,
         remboursees: [],
         reconversionId: null,
         erreur: null,

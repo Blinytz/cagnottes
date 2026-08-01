@@ -43,7 +43,7 @@ node --test "tests/*.test.mjs"
 
 | Fichier | Couvre |
 |---|---|
-| `tests/bourse.test.mjs` | Conversion à parité fixe, plafonnement, reprise d'un montant libre, reconversion du reliquat, impossibilité de créer des Éclats, coupure réseau en cours de reprise |
+| `tests/bourse.test.mjs` | Conversion à parité fixe, plafonnement, reprise d'un montant libre, reconversion du reliquat, conversions héritées du taux variable, impossibilité de créer des Éclats, coupure réseau en cours de reprise |
 | `tests/eclats.test.mjs` | Journal des versements : plafonnement, double clic, rejeu réseau, remboursement exactement-une-fois |
 | `tests/eclats-local.test.mjs` | Équivalence du journal local avec la sémantique SQL du registre commun |
 

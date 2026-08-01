@@ -274,6 +274,79 @@ test('coupure APRÈS remboursement : le rejeu reconvertit le reliquat', async ()
   assert.equal(bourse.totaux().centimes, 3000);
 });
 
+// ---- Conversions héritées de la période à taux variable ----
+//
+// Avant la parité fixe, une conversion pouvait dépenser 1 000 ✦ pour ne
+// créditer que 6,00 € (taux 0,60) ou au contraire 12,00 € (taux 1,40). Le
+// remboursement rend les Éclats RÉELLEMENT dépensés : sans précaution, rendre
+// ces euros en fabriquerait ou en détruirait.
+
+/* Injecte une conversion héritée : `eclats` dépensés ≠ `centimes` crédités. */
+async function heriter({ bourse, journal, registre }, { eclats, centimes, ref = 'legacy' }) {
+  // Les Éclats ont bien été gagnés puis dépensés : le registre retombe à zéro.
+  registre._inserer({
+    amount: eclats, appId: 'test', kind: 'reward', reason: 'gains passés',
+    referenceType: 'test', referenceId: null, idempotencyKey: `test:dotation:${ref}`,
+  });
+  registre._inserer({
+    amount: -eclats, appId: 'cagnottes', kind: 'spend', reason: 'Conversion (taux variable)',
+    referenceType: 'conversion_euro', referenceId: ref,
+    idempotencyKey: `cagnottes:conversion:${ref}`,
+  });
+  await journal.crediter({
+    appId: 'cagnottes', montant: centimes, reason: 'Conversion héritée',
+    referenceType: 'conversion_euro', referenceId: ref,
+    idempotencyKey: `cagnottes:credit-conversion:${ref}`,
+  });
+  bourse._etat().conversions[ref] = {
+    id: ref, eclatsDemandes: eclats, eclats, centimes,
+    statut: CONVERSION_STATUT.CONFIRMEE,
+    createdAt: '2026-07-28T10:00:00.000Z', confirmedAt: '2026-07-28T10:00:00.000Z',
+    movementId: 'legacy', ajuste: false, repriseId: null, erreur: null,
+  };
+}
+
+test('AUCUNE CRÉATION sur une conversion héritée à taux bas', async () => {
+  // 1 000 ✦ avaient été dépensés pour seulement 6,00 € (taux 0,60).
+  const f = fabrique({ eclatsDispo: 0 });
+  await heriter(f, { eclats: 1000, centimes: 600 });
+  assert.equal(f.bourse.soldeCentimes(), 600);
+
+  const r = await f.bourse.rendre(600);
+  assert.equal(r.ok, true);
+  assert.equal(await f.registre.solde(), 600,
+    '600 centimes rendus doivent donner 600 ✦, pas les 1 000 dépensés');
+  assert.equal(f.bourse.soldeCentimes(), 0);
+});
+
+test('AUCUNE DESTRUCTION sur une conversion héritée à taux haut', async () => {
+  // 1 000 ✦ avaient rapporté 12,00 € (taux 1,20) : 2,00 € ne sont adossés à rien.
+  const f = fabrique({ eclatsDispo: 0 });
+  await heriter(f, { eclats: 1000, centimes: 1200 });
+  assert.equal(f.bourse.soldeCentimes(), 1200);
+  assert.equal(f.bourse.maxRendable(), 1000, 'plafonné aux Éclats réellement dépensés');
+
+  const trop = await f.bourse.rendre(1200);
+  assert.equal(trop.ok, false);
+  assert.equal(trop.reason, 'solde_insuffisant');
+
+  const r = await f.bourse.rendre(1000);
+  assert.equal(r.ok, true);
+  assert.equal(await f.registre.solde(), 1000, 'rendu à parité, sans perte');
+  assert.equal(f.bourse.soldeCentimes(), 200, 'les 2,00 € non adossés restent acquis');
+  assert.equal(f.bourse.totaux().centimes, 200, 'et restent tracés');
+});
+
+test('reprise partielle sur une conversion héritée : parité respectée', async () => {
+  const f = fabrique({ eclatsDispo: 0 });
+  await heriter(f, { eclats: 1000, centimes: 600 });
+  const r = await f.bourse.rendre(250);
+  assert.equal(r.ok, true);
+  assert.equal(await f.registre.solde(), 250, '250 centimes → 250 ✦');
+  assert.equal(f.bourse.soldeCentimes(), 350);
+  assert.equal(f.bourse.totaux().centimes, 350, 'invariant : solde = conversions actives');
+});
+
 test('rejouer une reprise confirmée ne rend rien de plus', async () => {
   const { bourse, registre } = fabrique({ eclatsDispo: 1000 });
   await bourse.convertir(400);

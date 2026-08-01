@@ -27,7 +27,7 @@ reste parlante là où « 60 000 ✦ » ne l'était pas.
 | `js/eclats-registre.js` | Client du registre commun (Supabase), pour les conversions. |
 | `js/bascule-euros.js` | Passage v2 (Éclats) → v3 (euros), fonctions pures. |
 | `js/main.js` | Assemblage. **Seul endroit qui décide d'où vient l'argent.** |
-| `tests/` | 42 tests (`node --test "tests/*.test.mjs"`). |
+| `tests/` | 45 tests (`node --test "tests/*.test.mjs"`). |
 
 ## Règles d'une conversion
 
@@ -63,6 +63,23 @@ Invariant maintenu à chaque étape :
 ```
 solde de la Bourse = Σ(conversions actives) − Σ(engagé en cagnottes)
 ```
+
+### Les conversions faites avant la parité fixe
+
+Pendant quelques jours, le taux a flotté entre 0,60 et 1,40. Les conversions de
+cette période ont dépensé un nombre d'Éclats **différent** des euros crédités,
+et elles sont toujours dans le journal.
+
+Or un remboursement rend les Éclats *réellement dépensés*. Sans précaution,
+rendre les 6,00 € issus d'une conversion à 0,60 rapporterait les 1 000 ✦
+dépensés — 400 Éclats créés à partir de rien.
+
+La sélection des conversions à défaire suit donc **deux cumuls** : les euros
+qu'elles ont crédités et les Éclats qu'elles ont dépensés. Il faut assez des
+deux, et le plafond reprenable devient `min(solde, Éclats adossés)`. Une
+conversion passée à un taux > 1,00 laisse ainsi des euros acquis mais non
+adossés : ils restent dépensables dans les cagnottes, mais ne peuvent plus
+repartir en Éclats.
 
 ### Ordre des opérations
 
