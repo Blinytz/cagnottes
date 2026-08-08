@@ -2,7 +2,7 @@
 
 /* Service worker : pré-cache de tous les assets pour un fonctionnement 100 % hors-ligne.
    Incrémenter CACHE_VERSION à chaque mise à jour de l'app pour invalider l'ancien cache. */
-const CACHE_VERSION = 'cagnottes-v5-reprise-partielle';
+const CACHE_VERSION = 'cagnottes-v6-logos';
 const ASSETS = [
   './',
   './index.html',
